@@ -1,32 +1,57 @@
+import os
+import argparse
 import json
-from pathlib import Path
-from news_sources import collect_news
+import logging
+
+from news_sources import fetch_market_news
 from gemini import generate_briefing
-from providers import get_visual
-from tts import synthesize
-from render import render_video, fallback_card
-from telegram import send_video
-from config import WORK,MAX_STORIES
+from tts import generate_speech
+from render import render_video
+from telegram import send_video_to_telegram
 
-def main():
-    items=collect_news()
-    if len(items)<MAX_STORIES: raise RuntimeError(f'Only {len(items)} usable news items found')
-    briefing=generate_briefing(items)
-    (WORK/'briefing.json').write_text(json.dumps(briefing,ensure_ascii=False,indent=2),encoding='utf-8')
-    story_assets={}; ai_used=0
-    for i,story in enumerate(briefing['stories'],1):
-        story_assets[i]=[]
-        for j,shot in enumerate(story['visual_plan'][:3],1):
-            p,ai_used=get_visual(shot['prompt'],i*10+j,ai_used)
-            if not p:
-                card=WORK/f'fallback_{i}_{j}.jpg'; fallback_card(card,story['category'],story['headline'],shot.get('overlay','')); p={'path':str(card),'type':'image'}
-            p['duration']=float(shot.get('duration',6)); story_assets[i].append(p)
-    # Ensure enough runtime: the renderer trims at 180s.
-    narration=' '.join([briefing['hook']]+[s['narration'] for s in briefing['stories']]+[briefing['ending']])
-    audio=synthesize(narration,WORK/'narration.wav')
-    video=render_video(briefing,audio,story_assets)
-    send_video(video,briefing['title'])
-    print(f'AI video clips used: {ai_used}')
-    print(f'OUTPUT: {video}')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
-if __name__=='__main__': main()
+def run_pipeline(edition: str = "india"):
+    os.makedirs("work/output", exist_ok=True)
+    logger.info(f"=== Starting Daily Market Video Engine: {edition.upper()} ===")
+
+    # 1. Collect fresh 24h market feeds
+    logger.info("Collecting 24h market stories...")
+    items = fetch_market_news(edition=edition, hours_fresh=24)
+    if not items:
+        logger.warning("No items within 24h window; checking 48h...")
+        items = fetch_market_news(edition=edition, hours_fresh=48)
+
+    logger.info(f"Gathered {len(items)} fresh candidate stories.")
+
+    # 2. Editorial Selection & Scriptwriting
+    briefing = generate_briefing(items, edition=edition)
+    with open(f"work/briefing_{edition}.json", "w") as f:
+        json.dump(briefing, f, indent=2)
+
+    # 3. Audio Narration
+    audio_path = f"work/narration_{edition}.mp3"
+    full_script = briefing.get("hook", "") + " "
+    for s in briefing.get("stories", []):
+        full_script += s.get("narration", "") + " "
+    full_script += briefing.get("outro", "")
+
+    generate_speech(full_script, audio_path)
+
+    # 4. Render 1080x1920 MP4
+    video_output = f"work/output/{edition}_market_3min.mp4"
+    render_video(briefing=briefing, audio_path=audio_path, output_path=video_output)
+
+    # 5. Telegram Delivery
+    send_video_to_telegram(video_path=video_output, briefing_data=briefing, edition=edition)
+
+    logger.info(f"=== {edition.upper()} Video Render and Delivery Complete! ===")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--edition", type=str, default="india", choices=["india", "global"])
+    args = parser.parse_args()
+
+    run_pipeline(edition=args.edition)
+    
