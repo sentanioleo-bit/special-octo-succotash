@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from typing import List, Dict, Any
-import google.generativeai as genai
+from google import genai
 
 logger = logging.getLogger(__name__)
 
@@ -11,10 +11,7 @@ def generate_briefing(news_items: List[Dict[str, Any]], edition: str = "india") 
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY is missing from environment.")
 
-    genai.configure(api_key=api_key)
-
-    # Models ordered by speed and availability
-    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro-latest"]
+    client = genai.Client(api_key=api_key)
 
     edition_name = (
         "Indian Stock Market (Nifty, Sensex, NSE/BSE)"
@@ -59,25 +56,11 @@ OUTPUT SPECIFICATION: Output valid JSON only:
 }}
 """
 
-    response = None
-    last_err = None
-
-    for model_name in candidate_models:
-        try:
-            logger.info(f"Attempting briefing generation with model: {model_name}")
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(
-                prompt,
-                generation_config={"response_mime_type": "application/json"}
-            )
-            if response and response.text:
-                break
-        except Exception as e:
-            logger.warning(f"Model {model_name} failed: {e}. Trying next fallback...")
-            last_err = e
-
-    if not response or not response.text:
-        raise RuntimeError(f"All candidate models failed to generate content. Last error: {last_err}")
+    response = client.models.generate_content(
+        model="gemini-3.0-flash",
+        contents=prompt,
+        config={"response_mime_type": "application/json"}
+    )
 
     try:
         return json.loads(response.text)
