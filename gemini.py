@@ -3,43 +3,21 @@ import json
 import logging
 from typing import List, Dict, Any
 from google import genai
+from groq import Groq
 
 logger = logging.getLogger(__name__)
 
+def _clean_json_markdown(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    return cleaned.strip()
+
 def generate_briefing(news_items: List[Dict[str, Any]], edition: str = "india") -> Dict[str, Any]:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY is missing from environment.")
-
-    client = genai.Client(api_key=api_key)
-
-    # 1. Dynamically fetch models supported by your API key
-    try:
-        models_pager = client.models.list()
-        valid_models = [
-            m.name.replace("models/", "")
-            for m in models_pager
-            if "generateContent" in getattr(m, "supported_generation_methods", [])
-            or "generateContent" in getattr(m, "supported_actions", [])
-        ]
-        logger.info(f"Available models for this key: {valid_models}")
-    except Exception as e:
-        logger.warning(f"Could not list models: {e}")
-        valid_models = []
-
-    # Pick the best available match or fall back to standard defaults
-    chosen_model = None
-    for candidate in valid_models:
-        if "flash" in candidate.lower():
-            chosen_model = candidate
-            break
-    if not chosen_model and valid_models:
-        chosen_model = valid_models[0]
-    if not chosen_model:
-        chosen_model = "gemini-1.5-flash-latest"
-
-    logger.info(f"Using model: {chosen_model}")
-
     edition_name = (
         "Indian Stock Market (Nifty, Sensex, NSE/BSE)"
         if edition.lower() == "india"
@@ -83,15 +61,41 @@ OUTPUT SPECIFICATION: Output valid JSON only:
 }}
 """
 
-    response = client.models.generate_content(
-        model=chosen_model,
-        contents=prompt,
-        config={"response_mime_type": "application/json"}
-    )
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    groq_key = os.getenv("GROQ_API_KEY")
 
-    try:
-        return json.loads(response.text)
-    except Exception as e:
-        logger.error(f"Failed to parse Gemini output: {e}\n{response.text}")
-        raise
-        
+    # 1. Try Gemini Interactions API first
+    if gemini_key:
+        try:
+            logger.info("Attempting briefing generation via Gemini...")
+            client = genai.Client(api_key=gemini_key)
+            response = client.interactions.create(
+                model="gemini-3.0-flash",
+                input=prompt
+            )
+            raw_text = _clean_json_markdown(response.output_text)
+            return json.loads(raw_text)
+        except Exception as e:
+            logger.warning(f"Gemini generation failed: {e}. Switching to Groq backup...")
+
+    # 2. Fallback to Groq (Llama-3.3-70b)
+    if groq_key:
+        try:
+            logger.info("Generating briefing via Groq (Llama-3.3-70b)...")
+            groq_client = Groq(api_key=groq_key)
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": "You are a financial news producer that responds strictly in valid JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"}
+            )
+            raw_text = completion.choices[0].message.content
+            return json.loads(_clean_json_markdown(raw_text))
+        except Exception as e:
+            logger.error(f"Groq generation failed: {e}")
+            raise e
+
+    raise RuntimeError("Both Gemini and Groq failed, or neither API key was provided.")
+    
