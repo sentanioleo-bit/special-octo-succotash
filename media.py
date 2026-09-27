@@ -1,21 +1,79 @@
-import re, requests
-from pathlib import Path
-from config import OPENVERSE_API, MEDIA, MEDIA_USER_AGENT
-HEADERS={'User-Agent':MEDIA_USER_AGENT}
+import os
+import random
+import logging
+import requests
+from PIL import Image, ImageDraw, ImageFont
 
-def safe(s): return re.sub(r'[^a-zA-Z0-9_-]+','_',s)[:70]
+logger = logging.getLogger(__name__)
 
-def search_openverse(query):
-    r=requests.get(OPENVERSE_API, params={'q':query,'page_size':8,'mature':'false'}, headers=HEADERS, timeout=25)
-    r.raise_for_status(); return r.json().get('results',[])
+FALLBACK_QUERIES = [
+    "stock market chart", "trading screen", "financial data", 
+    "money trading", "stock exchange bull", "cryptocurrency trading",
+    "business presentation graph", "investment analysis"
+]
 
-def download_visual(query,index):
+def fetch_motion_video(query: str, output_path: str) -> bool:
+    api_key = os.getenv("PEXELS_API_KEY")
+    if not api_key:
+        return False
+
+    headers = {"Authorization": api_key}
+    search_url = f"https://api.pexels.com/videos/search?query={requests.utils.quote(query)}&orientation=portrait&per_page=6"
+
     try:
-        for item in search_openverse(query):
-            url=item.get('thumbnail') or item.get('url')
-            if not url: continue
-            ext='.jpg'; path=MEDIA/f'{index:02d}_{safe(query)}{ext}'
-            rr=requests.get(url,headers=HEADERS,timeout=30); rr.raise_for_status(); path.write_bytes(rr.content)
-            return {'path':str(path),'type':'image','creator':item.get('creator',''),'license':item.get('license',''),'source':item.get('foreign_landing_url','')}
-    except Exception as exc: print(f'[WARN] Openverse {query}: {exc}')
-    return None
+        r = requests.get(search_url, headers=headers, timeout=12)
+        data = r.json()
+
+        videos = data.get("videos", [])
+        if not videos:
+            fallback = random.choice(FALLBACK_QUERIES)
+            r = requests.get(f"https://api.pexels.com/videos/search?query={requests.utils.quote(fallback)}&orientation=portrait&per_page=6", headers=headers, timeout=12)
+            videos = r.json().get("videos", [])
+
+        if not videos:
+            return False
+
+        selected_video = random.choice(videos)
+        video_files = selected_video.get("video_files", [])
+
+        # Prioritize 1080x1920 or HD portrait links
+        best_url = None
+        for vf in video_files:
+            if vf.get("width") == 1080:
+                best_url = vf.get("link")
+                break
+        if not best_url and video_files:
+            best_url = video_files[0].get("link")
+
+        if best_url:
+            resp = requests.get(best_url, stream=True, timeout=25)
+            with open(output_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    f.write(chunk)
+            logger.info(f"Retrieved vertical motion video for: {query}")
+            return True
+    except Exception as e:
+        logger.warning(f"Error fetching motion video: {e}")
+
+    return False
+
+def generate_fallback_card(headline: str, ticker: str, output_image_path: str):
+    """Generates a professional 1080x1920 graphic card if video fetching fails."""
+    width, height = 1080, 1920
+    im = Image.new("RGB", (width, height), color=(10, 15, 29))
+    draw = ImageDraw.Draw(im)
+
+    # Accent Header Bar
+    draw.rectangle([0, 0, width, 180], fill=(22, 33, 62))
+    
+    # Simple clean box for headline
+    draw.rectangle([60, 400, 1020, 1000], fill=(15, 23, 42), outline=(56, 189, 248), width=3)
+    
+    # Ticker Badge
+    draw.rectangle([60, 1050, 450, 1140], fill=(16, 185, 129))
+    draw.text((80, 1070), f"⚡ {ticker.upper()}", fill=(255, 255, 255))
+    draw.text((100, 480), headline, fill=(255, 255, 255))
+
+    os.makedirs(os.path.dirname(output_image_path), exist_ok=True)
+    im.save(output_image_path)
+    
