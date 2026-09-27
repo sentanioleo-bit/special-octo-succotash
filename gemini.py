@@ -1,66 +1,66 @@
+import os
 import json
-from google import genai
-from google.genai import types
-from config import GEMINI_API_KEY, GEMINI_MODEL, MAX_STORIES
+import logging
+from typing import List, Dict, Any
+import google.generativeai as genai
 
-SCHEMA = {
-  'type': 'object', 'properties': {
-    'title': {'type':'string'}, 'hook': {'type':'string'},
-    'stories': {'type':'array','minItems':10,'maxItems':10,'items':{
-      'type':'object','properties':{
-        'headline':{'type':'string'}, 'category':{'type':'string'},
-        'narration':{'type':'string'}, 'visual_plan':{'type':'array','items':{
-          'type':'object','properties':{
-            'duration':{'type':'number'}, 'type':{'type':'string'},
-            'prompt':{'type':'string'}, 'overlay':{'type':'string'}
-          },'required':['duration','type','prompt','overlay']
-        }},
-        'source':{'type':'string'}, 'source_url':{'type':'string'},
-        'why_it_matters':{'type':'string'}
-      },'required':['headline','category','narration','visual_plan','source','source_url','why_it_matters']
-    }},
-    'ending': {'type':'string'}
-  }, 'required':['title','hook','stories','ending']
-}
+logger = logging.getLogger(__name__)
 
-SYSTEM = '''You are the senior producer and fact-checking editor of a premium Indian digital news briefing.
-Create an ORIGINAL, neutral, 3-minute vertical news package from supplied RSS material.
+def generate_briefing(news_items: List[Dict[str, Any]], edition: str = "india") -> Dict[str, Any]:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is missing from environment.")
 
-FORMAT: 9:16, 1080x1920, about 180 seconds, 10 stories.
-Target 32-42 spoken words per story. Hook 12-18 words. Ending 10-16 words.
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-1.5-pro")
 
-EDITORIAL:
-- Never invent facts, quotes, numbers, sources or events.
-- Use only information supported by supplied items.
-- Prefer facts that appear in multiple independent source items.
-- If a claim is uncertain or sources disagree, say so briefly.
-- Do not copy article sentences; rewrite in original language.
-- For stocks/markets, report facts and clearly label interpretation; no personalized financial advice.
-- Each story must answer WHAT happened + WHY it matters.
-- Natural spoken English, concise, calm, energetic, trustworthy.
+    edition_name = "Indian Stock Market (Nifty, Sensex, NSE/BSE)" if edition.lower() == "india" else "Global Financial Markets (Wall Street, Nasdaq, Macro)"
 
-VISUAL DIRECTOR:
-For each story create 3 shots totaling about 17-18 seconds.
-Use a mixture of: real-photo, stock-video, chart, map, infographic, ai-video.
-Only request ai-video for visually useful generic scenes that do NOT fabricate real breaking-news footage.
-Never ask AI video to depict a real person as if they were actually present at a breaking event.
-Avoid logos and unreadable text in generated footage.
-Each AI-video prompt must describe one self-contained 6-8 second cinematic shot.
-Overlay text must be <= 7 words.
+    prompt = f"""
+You are the senior executive producer of a premier daily financial vertical video channel.
+Target audience: Traders and investors who want fast, accurate, professional analysis.
 
-The final result must be valid JSON matching the schema.'''
+EDITION: {edition_name}
+AVAILABLE RECENT NEWS:
+{json.dumps(news_items[:30], indent=2)}
 
-def build_prompt(items):
-    compact = [{k:x.get(k,'') for k in ('category','title','summary','feed_source','link','published')} for x in items]
-    return SYSTEM + '\n\nSOURCE MATERIAL:\n' + json.dumps(compact, ensure_ascii=False)
+TASK:
+1. Pick the 10 most impactful stories.
+2. Produce a tight 3-minute narration script (~420 total words, ~145 words per minute).
+3. The hook must instantly capture traders within the first 5 seconds.
+4. Each story must include:
+   - "headline": Short punchy title (max 7 words)
+   - "ticker": Key ticker/stat (e.g., "NIFTY +1.2%", "RELIANCE EARNINGS", "FED RATES")
+   - "narration": Spoken narration script (~38-42 words)
+   - "search_query": A clean 2-3 word search query for financial motion video b-roll (e.g., "stock chart", "trading desk", "currency exchange", "oil refinery", "wall street bull")
 
-def generate_briefing(items):
-    if not GEMINI_API_KEY: raise RuntimeError('GEMINI_API_KEY is missing')
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    r = client.models.generate_content(
-        model=GEMINI_MODEL, contents=build_prompt(items),
-        config=types.GenerateContentConfig(response_mime_type='application/json', response_schema=SCHEMA, temperature=0.35)
+OUTPUT SPECIFICATION: Output valid JSON only:
+{{
+  "edition": "{edition}",
+  "yt_title": "Top 10 Market Stories Today: Biggest Moves & Predictions | #Shorts",
+  "yt_description": "Here are today's top 10 market-moving stories. Trade prepared and follow for daily pre-market updates.",
+  "hook": "5-second rapid hook covering the top 3 themes of the day",
+  "stories": [
+    {{
+      "id": 1,
+      "headline": "Headline Text",
+      "ticker": "NIFTY 25,100",
+      "narration": "Script text spoken by voice",
+      "search_query": "stock trading chart"
+    }}
+  ],
+  "outro": "Follow for daily market intelligence before the opening bell."
+}}
+"""
+
+    response = model.generate_content(
+        prompt,
+        generation_config={"response_mime_type": "application/json"}
     )
-    data = json.loads(r.text)
-    if len(data.get('stories', [])) != MAX_STORIES: raise ValueError('Expected exactly 10 stories')
-    return data
+
+    try:
+        return json.loads(response.text)
+    except Exception as e:
+        logger.error(f"Failed to parse Gemini output: {e}\n{response.text}")
+        raise
+        
