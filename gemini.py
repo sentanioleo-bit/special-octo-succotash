@@ -12,9 +12,15 @@ def generate_briefing(news_items: List[Dict[str, Any]], edition: str = "india") 
         raise RuntimeError("GEMINI_API_KEY is missing from environment.")
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-pro")
 
-    edition_name = "Indian Stock Market (Nifty, Sensex, NSE/BSE)" if edition.lower() == "india" else "Global Financial Markets (Wall Street, Nasdaq, Macro)"
+    # Models ordered by speed and availability
+    candidate_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro-latest"]
+
+    edition_name = (
+        "Indian Stock Market (Nifty, Sensex, NSE/BSE)"
+        if edition.lower() == "india"
+        else "Global Financial Markets (Wall Street, Nasdaq, Macro)"
+    )
 
     prompt = f"""
 You are the senior executive producer of a premier daily financial vertical video channel.
@@ -53,10 +59,25 @@ OUTPUT SPECIFICATION: Output valid JSON only:
 }}
 """
 
-    response = model.generate_content(
-        prompt,
-        generation_config={"response_mime_type": "application/json"}
-    )
+    response = None
+    last_err = None
+
+    for model_name in candidate_models:
+        try:
+            logger.info(f"Attempting briefing generation with model: {model_name}")
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(
+                prompt,
+                generation_config={"response_mime_type": "application/json"}
+            )
+            if response and response.text:
+                break
+        except Exception as e:
+            logger.warning(f"Model {model_name} failed: {e}. Trying next fallback...")
+            last_err = e
+
+    if not response or not response.text:
+        raise RuntimeError(f"All candidate models failed to generate content. Last error: {last_err}")
 
     try:
         return json.loads(response.text)
