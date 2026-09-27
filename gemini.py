@@ -13,6 +13,33 @@ def generate_briefing(news_items: List[Dict[str, Any]], edition: str = "india") 
 
     client = genai.Client(api_key=api_key)
 
+    # 1. Dynamically fetch models supported by your API key
+    try:
+        models_pager = client.models.list()
+        valid_models = [
+            m.name.replace("models/", "")
+            for m in models_pager
+            if "generateContent" in getattr(m, "supported_generation_methods", [])
+            or "generateContent" in getattr(m, "supported_actions", [])
+        ]
+        logger.info(f"Available models for this key: {valid_models}")
+    except Exception as e:
+        logger.warning(f"Could not list models: {e}")
+        valid_models = []
+
+    # Pick the best available match or fall back to standard defaults
+    chosen_model = None
+    for candidate in valid_models:
+        if "flash" in candidate.lower():
+            chosen_model = candidate
+            break
+    if not chosen_model and valid_models:
+        chosen_model = valid_models[0]
+    if not chosen_model:
+        chosen_model = "gemini-1.5-flash-latest"
+
+    logger.info(f"Using model: {chosen_model}")
+
     edition_name = (
         "Indian Stock Market (Nifty, Sensex, NSE/BSE)"
         if edition.lower() == "india"
@@ -57,7 +84,7 @@ OUTPUT SPECIFICATION: Output valid JSON only:
 """
 
     response = client.models.generate_content(
-        model="gemini-3.0-flash",
+        model=chosen_model,
         contents=prompt,
         config={"response_mime_type": "application/json"}
     )
