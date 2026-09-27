@@ -1,7 +1,11 @@
 google-genai
 groq
+feedparser
+beautifulsoup4
+requests
 edge-tts
 moviepy
-requests
+pillow
+numpy
 flake8
 pyflakes
