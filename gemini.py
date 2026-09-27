@@ -2,8 +2,6 @@ import os
 import json
 import logging
 from typing import List, Dict, Any
-from google import genai
-from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -64,30 +62,29 @@ OUTPUT SPECIFICATION: Output valid JSON only:
     gemini_key = os.getenv("GEMINI_API_KEY")
     groq_key = os.getenv("GROQ_API_KEY")
 
-    # 1. Try Gemini with Google's suggested model
-    if gemini_key:
-        for model_id in ["gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash"]:
-            try:
-                logger.info(f"Attempting briefing generation via Gemini ({model_id})...")
-                client = genai.Client(api_key=gemini_key)
-                response = client.models.generate_content(
-                    model=model_id,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(response_mime_type="application/json")
-                )
-                if response and response.text:
-                    return json.loads(_clean_json(response.text))
-            except Exception as e:
-                logger.warning(f"Gemini {model_id} failed: {e}. Trying fallback...")
-
-    # 2. Try Groq (Llama-3.3-70b) if key is provided
+    # 1. Try Groq first with automatic model discovery
     if groq_key:
         try:
             from groq import Groq
-            logger.info("Generating briefing via Groq (Llama-3.3-70b)...")
             groq_client = Groq(api_key=groq_key)
+            
+            # Fetch active models on this key automatically
+            available_groq = [m.id for m in groq_client.models.list().data]
+            logger.info(f"Available Groq models: {available_groq}")
+            
+            # Prioritize standard fast models
+            groq_model = "llama-3.1-8b-instant"
+            for cand in ["llama-3.1-8b-instant", "llama3-8b-8192", "mixtral-8x7b-32768"]:
+                if cand in available_groq:
+                    groq_model = cand
+                    break
+            else:
+                if available_groq:
+                    groq_model = available_groq[0]
+
+            logger.info(f"Generating briefing via Groq ({groq_model})...")
             completion = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=groq_model,
                 messages=[
                     {"role": "system", "content": "You are a financial news producer that responds strictly in valid JSON."},
                     {"role": "user", "content": prompt}
@@ -97,7 +94,38 @@ OUTPUT SPECIFICATION: Output valid JSON only:
             raw_text = completion.choices[0].message.content
             return json.loads(_clean_json(raw_text))
         except Exception as e:
-            logger.error(f"Groq fallback failed: {e}")
+            logger.warning(f"Groq generation failed: {e}. Trying Gemini...")
 
-    raise RuntimeError("Briefing generation failed across all available providers.")
+    # 2. Try Gemini with dynamic model listing
+    if gemini_key:
+        try:
+            from google import genai
+            from google.genai import types
+            
+            client = genai.Client(api_key=gemini_key)
+            
+            # Discover supported models
+            valid_gemini = []
+            try:
+                for m in client.models.list():
+                    actions = getattr(m, "supported_actions", []) or getattr(m, "supported_generation_methods", [])
+                    if "generateContent" in actions:
+                        valid_gemini.append(m.name.replace("models/", ""))
+            except Exception:
+                pass
+            
+            gemini_model = valid_gemini[0] if valid_gemini else "gemini-2.0-flash"
+            logger.info(f"Generating briefing via Gemini ({gemini_model})...")
+            
+            response = client.models.generate_content(
+                model=gemini_model,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            if response and response.text:
+                return json.loads(_clean_json(response.text))
+        except Exception as e:
+            logger.error(f"Gemini generation failed: {e}")
+
+    raise RuntimeError("Briefing generation failed across both Groq and Gemini.")
     
