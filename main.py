@@ -5,7 +5,7 @@ import logging
 
 from news_sources import fetch_market_news
 from gemini import generate_briefing
-from tts import generate_speech
+from tts import synthesize
 from render import render_video
 from telegram import send_video_to_telegram
 
@@ -37,7 +37,7 @@ def run_pipeline(edition: str = "india"):
         full_script += s.get("narration", "") + " "
     full_script += briefing.get("outro", "")
 
-    generate_speech(full_script, audio_path)
+    synthesize(full_script, audio_path)
 
     # 4. Render 1080x1920 MP4
     video_output = f"work/output/{edition}_market_3min.mp4"
