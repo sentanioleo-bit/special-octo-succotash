@@ -1,31 +1,43 @@
-import base64
-from pathlib import Path
-from google import genai
-from config import GEMINI_API_KEY, GEMINI_TTS_MODEL, GEMINI_TTS_VOICE, WORK
+import os
+import asyncio
+import logging
+from typing import Dict, Any
+import edge_tts
 
-def synthesize(text, out_path=None):
-    if not GEMINI_API_KEY:
-        raise RuntimeError('GEMINI_API_KEY is missing')
-    out = Path(out_path or WORK / 'narration.wav')
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    interaction = client.interactions.create(
-        model=GEMINI_TTS_MODEL,
-        input=[{
-            'type': 'user_input',
-            'content': [{
-                'type': 'text',
-                'text': text,
-                'annotations': [{
-                    'type': 'speech_metadata',
-                    'style': 'professional Indian digital news anchor; clear, natural, confident; moderate pace; crisp pronunciation; subtle emphasis on names and numbers'
-                }]
-            }]
-        }],
-        response_format={'type': 'audio'},
-        generation_config={'speech_config': [{'voice': GEMINI_TTS_VOICE}]}
-    )
-    out.write_bytes(base64.b64decode(interaction.output_audio.data))
-    return out
+logger = logging.getLogger(__name__)
 
-# Alias so main.py can import and call generate_speech
-generate_speech = synthesize
+VOICE_INDIA = "en-IN-NeerjaNeural"
+VOICE_GLOBAL = "en-US-ChristopherNeural"
+
+async def _synth(text: str, voice: str, path: str):
+    # -5% rate guarantees authoritative pacing and accurate 180s runtime
+    communicate = edge_tts.Communicate(text, voice, rate="-5%")
+    await communicate.save(path)
+
+def generate_narration_audio(briefing: Dict[str, Any], edition: str = "india", out_dir: str = "work/audio") -> Dict[str, Any]:
+    os.makedirs(out_dir, exist_ok=True)
+    voice = VOICE_INDIA if edition.lower() == "india" else VOICE_GLOBAL
+    loop = asyncio.get_event_loop()
+
+    # 1. Hook
+    hook_path = os.path.join(out_dir, "hook.mp3")
+    loop.run_until_complete(_synth(briefing.get("hook", "Daily market briefing."), voice, hook_path))
+
+    # 2. Individual Story Audio Files
+    story_audio_paths = []
+    for idx, story in enumerate(briefing.get("stories", []), start=1):
+        story_file = os.path.join(out_dir, f"story_{idx:02d}.mp3")
+        text = story.get("narration", "")
+        loop.run_until_complete(_synth(text, voice, story_file))
+        story_audio_paths.append(story_file)
+
+    # 3. Outro
+    outro_path = os.path.join(out_dir, "outro.mp3")
+    loop.run_until_complete(_synth(briefing.get("outro", "Follow for daily intelligence."), voice, outro_path))
+
+    return {
+        "hook_audio": hook_path,
+        "story_audios": story_audio_paths,
+        "outro_audio": outro_path
+    }
+    
