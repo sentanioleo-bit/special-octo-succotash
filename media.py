@@ -1,79 +1,88 @@
 import os
-import random
-import logging
 import requests
-from PIL import Image, ImageDraw, ImageFont
+import logging
+from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
-FALLBACK_QUERIES = [
-    "stock market chart", "trading screen", "financial data", 
-    "money trading", "stock exchange bull", "cryptocurrency trading",
-    "business presentation graph", "investment analysis"
-]
+PEXELS_SEARCH_URL = "https://api.pexels.com/videos/search"
 
-def fetch_motion_video(query: str, output_path: str) -> bool:
-    api_key = os.getenv("PEXELS_API_KEY")
-    if not api_key:
-        return False
-
-    headers = {"Authorization": api_key}
-    search_url = f"https://api.pexels.com/videos/search?query={requests.utils.quote(query)}&orientation=portrait&per_page=6"
-
+def download_file(url: str, output_path: str) -> bool:
     try:
-        r = requests.get(search_url, headers=headers, timeout=12)
-        data = r.json()
-
-        videos = data.get("videos", [])
-        if not videos:
-            fallback = random.choice(FALLBACK_QUERIES)
-            r = requests.get(f"https://api.pexels.com/videos/search?query={requests.utils.quote(fallback)}&orientation=portrait&per_page=6", headers=headers, timeout=12)
-            videos = r.json().get("videos", [])
-
-        if not videos:
-            return False
-
-        selected_video = random.choice(videos)
-        video_files = selected_video.get("video_files", [])
-
-        # Prioritize 1080x1920 or HD portrait links
-        best_url = None
-        for vf in video_files:
-            if vf.get("width") == 1080:
-                best_url = vf.get("link")
-                break
-        if not best_url and video_files:
-            best_url = video_files[0].get("link")
-
-        if best_url:
-            resp = requests.get(best_url, stream=True, timeout=25)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        response = requests.get(url, stream=True, timeout=30)
+        if response.status_code == 200:
             with open(output_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
-            logger.info(f"Retrieved vertical motion video for: {query}")
             return True
+        else:
+            logger.warning(f"Download failed with status: {response.status_code}")
     except Exception as e:
-        logger.warning(f"Error fetching motion video: {e}")
-
+        logger.warning(f"Error downloading {url}: {e}")
     return False
 
-def generate_fallback_card(headline: str, ticker: str, output_image_path: str):
-    """Generates a professional 1080x1920 graphic card if video fetching fails."""
-    width, height = 1080, 1920
-    im = Image.new("RGB", (width, height), color=(10, 15, 29))
-    draw = ImageDraw.Draw(im)
+def search_pexels_video(query: str, api_key: str) -> str:
+    if not api_key:
+        return ""
+    headers = {"Authorization": api_key}
+    params = {
+        "query": query,
+        "orientation": "portrait",
+        "size": "medium",
+        "per_page": 5
+    }
+    try:
+        resp = requests.get(PEXELS_SEARCH_URL, headers=headers, params=params, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            videos = data.get("videos", [])
+            for vid in videos:
+                for file_info in vid.get("video_files", []):
+                    # Prefer HD vertical or standard vertical files
+                    if file_info.get("height", 0) >= 1280 or file_info.get("width", 0) >= 720:
+                        return file_info.get("link", "")
+                if vid.get("video_files"):
+                    return vid["video_files"][0].get("link", "")
+    except Exception as e:
+        logger.warning(f"Pexels query '{query}' failed: {e}")
+    return ""
 
-    # Accent Header Bar
-    draw.rectangle([0, 0, width, 180], fill=(22, 33, 62))
+def collect_story_media(briefing: Dict[str, Any], out_dir: str = "work/media") -> List[str]:
+    os.makedirs(out_dir, exist_ok=True)
+    pexels_key = os.getenv("PEXELS_API_KEY", "")
+    downloaded_paths = []
     
-    # Simple clean box for headline
-    draw.rectangle([60, 400, 1020, 1000], fill=(15, 23, 42), outline=(56, 189, 248), width=3)
+    # 1. Download b-roll for Hook
+    hook_query = "stock market bull"
+    hook_target = os.path.join(out_dir, "media_hook.mp4")
+    url = search_pexels_video(hook_query, pexels_key)
+    if url and download_file(url, hook_target):
+        downloaded_paths.append(hook_target)
     
-    # Ticker Badge
-    draw.rectangle([60, 1050, 450, 1140], fill=(16, 185, 129))
-    draw.text((80, 1070), f"⚡ {ticker.upper()}", fill=(255, 255, 255))
-    draw.text((100, 480), headline, fill=(255, 255, 255))
+    # 2. Download b-roll for each story
+    for idx, story in enumerate(briefing.get("stories", []), start=1):
+        query = story.get("search_query") or "stock trading chart"
+        target_path = os.path.join(out_dir, f"media_story_{idx:02d}.mp4")
+        
+        video_url = search_pexels_video(query, pexels_key)
+        if video_url and download_file(video_url, target_path):
+            downloaded_paths.append(target_path)
+        else:
+            # Fallback to general market footage if specific query yields no results
+            fallback_url = search_pexels_video("trading desk", pexels_key)
+            if fallback_url and download_file(fallback_url, target_path):
+                downloaded_paths.append(target_path)
 
-    os.makedirs(os.path.dirname(output_image_path), exist_ok=True)
-    im.save(output_image_path)
-    
+    # 3. Download outro b-roll
+    outro_target = os.path.join(out_dir, "media_outro.mp4")
+    outro_url = search_pexels_video("financial district", pexels_key)
+    if outro_url and download_file(outro_url, outro_target):
+        downloaded_paths.append(outro_target)
+
+    return downloaded_paths
+
+# Aliases for backwards compatibility with any older caller scripts
+collect_media = collect_story_media
+fetch_media = collect_story_media
+download_story_media = collect_story_media
