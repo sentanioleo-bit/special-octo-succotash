@@ -63,16 +63,13 @@ jobs:
           VIDEO_FILE=$(ls work/output/*.mp4 *.mp4 2>/dev/null | head -n 1)
           
           if [ -n "$VIDEO_FILE" ]; then
-            # Copy to clean standardized filename
             cp "$VIDEO_FILE" latest_market_briefing.mp4
-            
-            # Create release and upload the direct mp4
             gh release create "$TAG_NAME" latest_market_briefing.mp4 \
               --title "Market Briefing - $(date +'%Y-%m-%d %H:%M')" \
-              --notes "Direct MP4 download for daily briefing video."
+              --notes "Direct MP4 download for broadcast briefing video."
             
             REPO="${{ github.repository }}"
-            DIRECT_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/latest_market_briefing.mp4"
+            DIRECT_URL="[https://github.com/$](https://github.com/$){REPO}/releases/download/${TAG_NAME}/latest_market_briefing.mp4"
             echo "DIRECT_URL=$DIRECT_URL" >> $GITHUB_ENV
             echo "Uploaded direct video to: $DIRECT_URL"
           else
@@ -95,12 +92,13 @@ jobs:
           
           if token and chat_id and url:
               msg = (
-                  f'🎬 <b>{edition} MARKET VIDEO READY</b>\n\n'
-                  f'✨ <b>Full 1080x1920 Original Quality MP4</b>\n\n'
-                  f'⬇️ <a href=\"{url}\"><b>TAP HERE TO DOWNLOAD VIDEO</b></a>\n\n'
-                  f'<i>Direct file link. Tap to start downloading immediately.</i>'
+                  f'🎬 <b>{edition} MARKET VIDEO READY (3 MIN BROADCAST)</b>\n\n'
+                  f'✨ <b>1080x1920 Original Quality (Zero Compression)</b>\n'
+                  f'⏱ <b>Exact 3:00 Duration • Synced Audio & Titles</b>\n\n'
+                  f'⬇️ <a href=\"{url}\"><b>TAP HERE TO DOWNLOAD RAW MP4</b></a>\n\n'
+                  f'<i>Direct CDN link. Tapping immediately starts download to your device.</i>'
               )
-              requests.post(f'https://api.telegram.org/bot{token}/sendMessage', json={
+              requests.post(f'[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage', json={
                   'chat_id': chat_id,
                   'text': msg,
                   'parse_mode': 'HTML'
