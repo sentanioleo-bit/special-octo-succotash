@@ -24,6 +24,8 @@ jobs:
   build-and-broadcast:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      EDITION: ${{ github.event_name == 'workflow_dispatch' && inputs.edition || (github.event.schedule == '30 13 * * 1-5' && 'global' || 'india') }}
 
     steps:
       - name: Checkout Repository
@@ -32,7 +34,10 @@ jobs:
       - name: Install System Dependencies & Fonts
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-noto fonts-dejavu-core fonts-freefont-ttf
+          sudo apt-get install -y ffmpeg imagemagick fonts-dejavu-core fonts-freefont-ttf
+          for f in /etc/ImageMagick-*/policy.xml; do
+            sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@*"/' "$f"
+          done
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -40,68 +45,41 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install Dependencies
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install -r requirements.txt
 
       - name: Run Market Video Pipeline
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-        run: |
-          EDITION="${{ inputs.edition || 'india' }}"
-          python main.py --edition $EDITION
+        run: python main.py --edition "$EDITION"
 
       - name: Publish Direct Video Download Release
-        id: create_release
+        id: release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="video-$(date +'%Y%m%d-%H%M%S')"
-          VIDEO_FILE=$(ls work/output/*.mp4 *.mp4 2>/dev/null | head -n 1)
-          
-          if [ -n "$VIDEO_FILE" ]; then
-            cp "$VIDEO_FILE" latest_market_briefing.mp4
-            gh release create "$TAG_NAME" latest_market_briefing.mp4 \
-              --title "Market Briefing - $(date +'%Y-%m-%d %H:%M')" \
-              --notes "Direct MP4 download for broadcast briefing video."
-            
-            REPO="${{ github.repository }}"
-            DIRECT_URL="[https://github.com/$](https://github.com/$){REPO}/releases/download/${TAG_NAME}/latest_market_briefing.mp4"
-            echo "DIRECT_URL=$DIRECT_URL" >> $GITHUB_ENV
-            echo "Uploaded direct video to: $DIRECT_URL"
-          else
-            echo "No video file found to publish."
-          fi
+          TAG="${EDITION}-$(date -u +%Y%m%d-%H%M)"
+          FILE="work/output/${EDITION}_market_3min.mp4"
+          gh release create "$TAG" "$FILE" \
+            --title "${EDITION^} Market Briefing $(date -u +%Y-%m-%d)" \
+            --notes "Automated daily market video ($EDITION edition)."
+          URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${EDITION}_market_3min.mp4"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       - name: Send Direct Download Link to Telegram
-        if: env.DIRECT_URL != ''
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          VIDEO_URL: ${{ steps.release.outputs.url }}
         run: |
-          EDITION="${{ inputs.edition || 'india' }}"
-          python -c "
-          import os, requests
-          token = os.getenv('TELEGRAM_BOT_TOKEN')
-          chat_id = os.getenv('TELEGRAM_CHAT_ID')
-          url = os.getenv('DIRECT_URL')
-          edition = os.getenv('EDITION', 'india').upper()
-          
-          if token and chat_id and url:
-              msg = (
-                  f'🎬 <b>{edition} MARKET VIDEO READY (3 MIN BROADCAST)</b>\n\n'
-                  f'✨ <b>1080x1920 Original Quality (Zero Compression)</b>\n'
-                  f'⏱ <b>Exact 3:00 Duration • Synced Audio & Titles</b>\n\n'
-                  f'⬇️ <a href=\"{url}\"><b>TAP HERE TO DOWNLOAD RAW MP4</b></a>\n\n'
-                  f'<i>Direct CDN link. Tapping immediately starts download to your device.</i>'
-              )
-              requests.post(f'[https://api.telegram.org/bot](https://api.telegram.org/bot){token}/sendMessage', json={
-                  'chat_id': chat_id,
-                  'text': msg,
-                  'parse_mode': 'HTML'
-              }, timeout=20)
-          "
-          
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets not set, skipping."
+            exit 0
+          fi
+          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${EDITION^} market briefing is ready: ${VIDEO_URL}"
