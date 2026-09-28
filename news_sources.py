@@ -30,3 +30,12 @@ def fetch_market_news(edition: str = "india") -> List[Dict[str, Any]]:
             feed = feedparser.parse(url, agent=USER_AGENT)
             for entry in feed.entries[:8]:
                 title = (entry.get("title") or "").strip()
+                summary = (entry.get("summary") or entry.get("description") or "").strip()
+                if title and title not in seen:
+                    seen.add(title)
+                    items.append({"title": title, "summary": summary[:200]})
+        except Exception as e:
+            logger.warning(f"Failed parsing feed {url}: {e}")
+
+    logger.info(f"Gathered {len(items)} candidate news stories for {edition.upper()}.")
+    return items7
