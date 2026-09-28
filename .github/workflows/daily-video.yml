@@ -2,9 +2,7 @@ name: Produce Daily Market Videos (India & Global)
 
 on:
   schedule:
-    # 02:30 UTC = 08:00 AM IST (India Pre-Market)
     - cron: '30 2 * * 1-5'
-    # 13:30 UTC = 07:00 PM IST (Global & US Market)
     - cron: '30 13 * * 1-5'
   workflow_dispatch:
     inputs:
