@@ -4,8 +4,6 @@ feedparser
 beautifulsoup4
 requests
 edge-tts
-moviepy
-pillow
-numpy
-flake8
-pyflakes
+moviepy==1.0.3
+pillow<10
+numpy<2
