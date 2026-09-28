@@ -1,114 +1,124 @@
 import os
-import subprocess
+import math
 import logging
+from typing import Dict, Any, List
+from moviepy.editor import (
+    VideoFileClip, AudioFileClip, TextClip,
+    CompositeVideoClip, concatenate_videoclips, ColorClip
+)
 
 logger = logging.getLogger(__name__)
 
-# Small, clean subtitle styling placed at bottom-center
-CLEAN_BOTTOM_SUBTITLES = (
-    "FontName=DejaVu Sans,"
-    "FontSize=13,"
-    "PrimaryColour=&H00FFFFFF,"
-    "OutlineColour=&H90000000,"
-    "BorderStyle=1,"
-    "Outline=1.2,"
-    "Shadow=0.5,"
-    "Alignment=2,"
-    "MarginV=35,"
-    "MarginL=25,"
-    "MarginR=25"
-)
+def _prepare_background(video_path: str, duration: float) -> VideoFileClip:
+    if video_path and os.path.exists(video_path):
+        try:
+            v = VideoFileClip(video_path)
+            if v.duration < duration:
+                loops = math.ceil(duration / v.duration)
+                v = v.loop(n=loops).subclip(0, duration)
+            else:
+                v = v.subclip(0, duration)
+            v = v.resize(height=1920)
+            x_center = (v.w - 1080) / 2
+            return v.crop(x1=max(0, x_center), width=1080, height=1920)
+        except Exception as e:
+            logger.warning(f"Error handling video broll {video_path}: {e}")
+    return ColorClip(size=(1080, 1920), color=(10, 15, 29), duration=duration)
 
-def build_srt(stories: list, srt_path: str, duration_per_story: float = 17.0):
-    """Creates timestamped synchronized subtitles."""
-    current_time = 0.0
-    with open(srt_path, "w", encoding="utf-8") as f:
-        for idx, story in enumerate(stories, start=1):
-            start_s = current_time
-            end_s = current_time + duration_per_story
-            current_time = end_s
-
-            start_str = f"{int(start_s//3600):02d}:{int((start_s%3600)//60):02d}:{int(start_s%60):02d},000"
-            end_str = f"{int(end_s//3600):02d}:{int((end_s%3600)//60):02d}:{int(end_s%60):02d},000"
-
-            text = story.get("narration", story.get("headline", ""))
-            f.write(f"{idx}\n{start_str} --> {end_str}\n{text}\n\n")
-
-def render_video(briefing: dict, audio_path: str, output_path: str):
-    from media import fetch_motion_video, generate_fallback_card
-
-    os.makedirs("work/clips", exist_ok=True)
-    stories = briefing.get("stories", [])
-    clip_paths = []
-
-    logger.info("Preparing video visuals for each story...")
-    for idx, story in enumerate(stories):
-        query = story.get("search_query", "stock market trading")
-        clip_path = f"work/clips/clip_{idx}.mp4"
-        
-        # Try getting vertical motion footage
-        downloaded = fetch_motion_video(query, clip_path)
-        
-        if not downloaded:
-            # Fallback to static card with slow zoom
-            fallback_img = f"work/clips/card_{idx}.png"
-            generate_fallback_card(story.get("headline", ""), story.get("ticker", ""), fallback_img)
-            
-            # Convert static image to 1080x1920 MP4
-            subprocess.run([
-                "ffmpeg", "-y", "-loop", "1", "-i", fallback_img,
-                "-t", "17",
-                "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-                "-r", "30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
-                clip_path
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            # Normalize motion clip to 1080x1920, 30fps, 17s
-            norm_clip = f"work/clips/norm_{idx}.mp4"
-            subprocess.run([
-                "ffmpeg", "-y", "-i", clip_path,
-                "-t", "17",
-                "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-                "-r", "30", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-an",
-                norm_clip
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            os.replace(norm_clip, clip_path)
-
-        clip_paths.append(clip_path)
-
-    # Concatenate clips
-    concat_list = "work/clips/concat.txt"
-    with open(concat_list, "w") as f:
-        for p in clip_paths:
-            f.write(f"file '{os.path.abspath(p)}'\n")
-
-    silent_concat = "work/silent_stitched.mp4"
-    subprocess.run([
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
-        "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", silent_concat
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    # Subtitles
-    srt_path = "work/captions.srt"
-    build_srt(stories, srt_path, duration_per_story=17.0)
-
-    # Final multiplexing: Combine video, audio narration, and clean bottom subtitles
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    abs_srt = os.path.abspath(srt_path).replace("\\", "/")
+def _build_caption_sequence(narration: str, total_duration: float) -> List[TextClip]:
+    words = narration.split()
+    if not words:
+        return []
     
-    ffmpeg_cmd = [
-        "ffmpeg", "-y",
-        "-i", silent_concat,
-        "-i", audio_path,
-        "-vf", f"subtitles='{abs_srt}':force_style='{CLEAN_BOTTOM_SUBTITLES}'",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "20",
-        "-c:a", "aac", "-b:a", "192k",
-        "-shortest",
-        "-movflags", "+faststart",
-        output_path
-    ]
+    # 4 to 5 words per subtitle card
+    chunk_size = 5
+    chunks = [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
+    chunk_duration = total_duration / len(chunks)
+    clips = []
 
-    logger.info("Executing final FFmpeg encode...")
-    subprocess.run(ffmpeg_cmd, check=True)
-    logger.info(f"Final video successfully generated: {output_path}")
+    for i, chunk in enumerate(chunks):
+        start_time = i * chunk_duration
+        clip = (
+            TextClip(
+                chunk.upper(),
+                fontsize=46,
+                color="#FFFFFF",
+                font="DejaVu-Sans-Bold",
+                stroke_color="black",
+                stroke_width=2,
+                method="caption",
+                size=(920, None),
+                align="center"
+            )
+            .set_start(start_time)
+            .set_duration(chunk_duration)
+            .set_position(("center", 1380))
+        )
+        clips.append(clip)
+    return clips
+
+def render_briefing_video(briefing: Dict[str, Any], media_assets: List[str], audio_manifest: Dict[str, Any], output_path: str) -> str:
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    segments = []
+
+    # 1. Hook Segment
+    hook_audio_path = audio_manifest.get("hook_audio")
+    if hook_audio_path and os.path.exists(hook_audio_path):
+        h_audio = AudioFileClip(hook_audio_path)
+        h_dur = h_audio.duration
+        h_vid = _prepare_background(media_assets[0] if media_assets else None, h_dur).set_audio(h_audio)
+        
+        banner = TextClip(" TODAY'S MARKET BRIEFING ", fontsize=48, color="#FACC15", font="DejaVu-Sans-Bold", bg_color="#000000").set_position(("center", 200)).set_duration(h_dur)
+        captions = _build_caption_sequence(briefing.get("hook", ""), h_dur)
+        segments.append(CompositeVideoClip([h_vid, banner] + captions))
+
+    # 2. 10 Story Segments
+    stories = briefing.get("stories", [])
+    story_audios = audio_manifest.get("story_audios", [])
+
+    for idx, story in enumerate(stories, start=1):
+        if idx - 1 < len(story_audios):
+            audio_p = story_audios[idx - 1]
+            if os.path.exists(audio_p):
+                s_audio = AudioFileClip(audio_p)
+                s_dur = s_audio.duration
+                broll_p = media_assets[idx % len(media_assets)] if media_assets else None
+                s_vid = _prepare_background(broll_p, s_dur).set_audio(s_audio)
+
+                # Segment Header: Index & Title
+                headline = story.get("headline", f"Market Story {idx}")
+                title_badge = TextClip(f" {idx:02d}. {headline.upper()} ", fontsize=44, color="#FACC15", font="DejaVu-Sans-Bold", bg_color="#000000").set_position(("center", 180)).set_duration(s_dur)
+
+                # Dynamic Financial Tag
+                ticker = story.get("ticker", "MARKET UPDATE")
+                ticker_badge = TextClip(f" {ticker} ", fontsize=36, color="#FFFFFF", font="DejaVu-Sans-Bold", bg_color="#1E293B").set_position(("center", 250)).set_duration(s_dur)
+
+                # Synchronized Word-Chunk Subtitles
+                captions = _build_caption_sequence(story.get("narration", ""), s_dur)
+
+                segments.append(CompositeVideoClip([s_vid, title_badge, ticker_badge] + captions))
+
+    # 3. Outro Segment
+    outro_audio_path = audio_manifest.get("outro_audio")
+    if outro_audio_path and os.path.exists(outro_audio_path):
+        o_audio = AudioFileClip(outro_audio_path)
+        o_dur = o_audio.duration
+        o_vid = _prepare_background(media_assets[-1] if media_assets else None, o_dur).set_audio(o_audio)
+        out_badge = TextClip(" SUBSCRIBE FOR DAILY BRIEFINGS ", fontsize=46, color="#FACC15", font="DejaVu-Sans-Bold", bg_color="#000000").set_position(("center", 200)).set_duration(o_dur)
+        captions = _build_caption_sequence(briefing.get("outro", ""), o_dur)
+        segments.append(CompositeVideoClip([o_vid, out_badge] + captions))
+
+    final_video = concatenate_videoclips(segments, method="compose")
+    
+    # Broadcast encoding: +faststart flag enables immediate playback without truncation
+    final_video.write_videofile(
+        output_path,
+        fps=24,
+        codec="libx264",
+        audio_codec="aac",
+        preset="fast",
+        bitrate="2600k",
+        ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    )
+    return output_path
     
