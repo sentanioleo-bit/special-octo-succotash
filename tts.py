@@ -30,3 +30,14 @@ def _synth_with_retry(text: str, voice: str, path: str, attempts: int = 4) -> No
         time.sleep(2 * n)
     raise RuntimeError(f"TTS failed for {path}: {last_err}")
 
+
+def generate_narration_audio(text: str, output_path: str, edition: str = "india") -> str:
+    """Generates narration audio file using edge-tts.
+
+    Returns the path to the generated audio file.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    voice = VOICE_INDIA if edition.lower() == "india" else VOICE_GLOBAL
+    _synth_with_retry(text, voice, output_path)
+    return output_path
+    
