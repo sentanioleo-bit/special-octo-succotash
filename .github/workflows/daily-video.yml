@@ -64,7 +64,7 @@ jobs:
           FILE="work/output/${EDITION}_market_3min.mp4"
           gh release create "$TAG" "$FILE" \
             --title "${EDITION^} Market Briefing $(date -u +%Y-%m-%d)" \
-            --notes "Automated daily market video ($EDITION edition)."
+            --notes "Automated daily market video ($EDITION edition). Full quality, not compressed."
           URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${EDITION}_market_3min.mp4"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
@@ -80,4 +80,4 @@ jobs:
           fi
           curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${EDITION^} market briefing is ready: ${VIDEO_URL}"
+            --data-urlencode "text=${EDITION^} market briefing is ready (full quality, no compression): ${VIDEO_URL}"
