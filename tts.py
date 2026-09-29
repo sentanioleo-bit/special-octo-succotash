@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import edge_tts
 
@@ -31,13 +31,30 @@ def _synth_with_retry(text: str, voice: str, path: str, attempts: int = 4) -> No
     raise RuntimeError(f"TTS failed for {path}: {last_err}")
 
 
-def generate_narration_audio(text: str, output_path: str, edition: str = "india") -> str:
-    """Generates narration audio file using edge-tts.
+def generate_narration_audio(briefing: Any, edition: str = "india", output_dir: str = "work/audio") -> List[Dict[str, Any]]:
+    """Synthesizes speech for each segment in the briefing and returns a manifest of audio files."""
+    os.makedirs(output_dir, exist_ok=True)
+    voice = VOICE_INDIA if str(edition).lower() == "india" else VOICE_GLOBAL
 
-    Returns the path to the generated audio file.
-    """
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    voice = VOICE_INDIA if edition.lower() == "india" else VOICE_GLOBAL
-    _synth_with_retry(text, voice, output_path)
-    return output_path
+    # Normalize items if briefing is a dict containing 'segments' or 'items', or already a list
+    if isinstance(briefing, dict):
+        segments = briefing.get("segments") or briefing.get("items") or briefing.get("news") or [briefing]
+    elif isinstance(briefing, list):
+        segments = briefing
+    else:
+        segments = [{"text": str(briefing)}]
+
+    manifest = []
+    for idx, item in enumerate(segments):
+        text = item.get("narration") or item.get("text") or item.get("script") or str(item)
+        audio_file = os.path.join(output_dir, f"clip_{idx:02d}.mp3")
+        
+        logger.info(f"Generating TTS clip {idx + 1}/{len(segments)}: {audio_file}")
+        _synth_with_retry(text, voice, audio_file)
+
+        manifest_item = dict(item) if isinstance(item, dict) else {"text": text}
+        manifest_item["audio_path"] = audio_file
+        manifest.append(manifest_item)
+
+    return manifest
     
