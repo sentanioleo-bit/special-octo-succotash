@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import edge_tts
 
@@ -31,30 +31,36 @@ def _synth_with_retry(text: str, voice: str, path: str, attempts: int = 4) -> No
     raise RuntimeError(f"TTS failed for {path}: {last_err}")
 
 
-def generate_narration_audio(briefing: Any, edition: str = "india", output_dir: str = "work/audio") -> List[Dict[str, Any]]:
-    """Synthesizes speech for each segment in the briefing and returns a manifest of audio files."""
+def generate_narration_audio(briefing: Dict[str, Any], edition: str = "india", output_dir: str = "work/audio") -> Dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
     voice = VOICE_INDIA if str(edition).lower() == "india" else VOICE_GLOBAL
 
-    # Normalize items if briefing is a dict containing 'segments' or 'items', or already a list
-    if isinstance(briefing, dict):
-        segments = briefing.get("segments") or briefing.get("items") or briefing.get("news") or [briefing]
-    elif isinstance(briefing, list):
-        segments = briefing
-    else:
-        segments = [{"text": str(briefing)}]
+    manifest = {
+        "hook_audio": None,
+        "story_audios": [],
+        "outro_audio": None,
+    }
 
-    manifest = []
-    for idx, item in enumerate(segments):
-        text = item.get("narration") or item.get("text") or item.get("script") or str(item)
-        audio_file = os.path.join(output_dir, f"clip_{idx:02d}.mp3")
-        
-        logger.info(f"Generating TTS clip {idx + 1}/{len(segments)}: {audio_file}")
-        _synth_with_retry(text, voice, audio_file)
+    # Hook
+    hook_text = briefing.get("hook")
+    if hook_text:
+        hook_path = os.path.join(output_dir, "hook.mp3")
+        _synth_with_retry(str(hook_text), voice, hook_path)
+        manifest["hook_audio"] = hook_path
 
-        manifest_item = dict(item) if isinstance(item, dict) else {"text": text}
-        manifest_item["audio_path"] = audio_file
-        manifest.append(manifest_item)
+    # Stories
+    for idx, story in enumerate(briefing.get("stories", []), start=1):
+        story_text = story.get("narration") or story.get("text") or str(story)
+        story_path = os.path.join(output_dir, f"story_{idx:02d}.mp3")
+        _synth_with_retry(str(story_text), voice, story_path)
+        manifest["story_audios"].append(story_path)
+
+    # Outro
+    outro_text = briefing.get("outro")
+    if outro_text:
+        outro_path = os.path.join(output_dir, "outro.mp3")
+        _synth_with_retry(str(outro_text), voice, outro_path)
+        manifest["outro_audio"] = outro_path
 
     return manifest
     
