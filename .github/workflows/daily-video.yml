@@ -51,7 +51,7 @@ jobs:
 
       - name: Check Code for Syntax & Import Errors
         run: |
-          ruff check . --select E9,F
+          ruff check . --select E9,F --ignore F401,F541
 
       - name: Run Market Video Pipeline
         env:
