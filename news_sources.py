@@ -38,4 +38,4 @@ def fetch_market_news(edition: str = "india") -> List[Dict[str, Any]]:
             logger.warning(f"Failed parsing feed {url}: {e}")
 
     logger.info(f"Gathered {len(items)} candidate news stories for {edition.upper()}.")
-    return items7
+    return items
