@@ -1,11 +1,12 @@
+import os
 import re
 import asyncio
 import edge_tts
 
-def normalize_text_for_anchor(text: str) -> str:
-    """Expands shorthand and financial symbols so edge-tts speaks conversationally."""
+def clean_script_for_broadcast(text: str) -> str:
+    """Pre-processes text to pronounce financial shorthand like a human anchor."""
     text = re.sub(r'[\?\.]{2,}', '.', text)
-    text = text.replace("&amp;", "and").replace("&", "and")
+    text = text.replace("&amp;", "and").replace("& Co..", "and Company.").replace("&", "and")
     text = re.sub(r'[\(\)\[\]]', '', text)
 
     expansions = {
@@ -23,10 +24,9 @@ def normalize_text_for_anchor(text: str) -> str:
         "Cr": "crore rupees",
         "Rs": "rupees"
     }
-    for acronym, spoken in expansions.items():
-        text = re.sub(rf'\b{re.escape(acronym)}\b', spoken, text)
+    for word, spoken in expansions.items():
+        text = re.sub(rf'\b{re.escape(word)}\b', spoken, text)
 
-    # Format currencies and percentages
     text = re.sub(r'\$(\d+(\.\d+)?)', r'\1 dollars', text)
     text = re.sub(r'(\d+(\.\d+)?)%', r'\1 percent', text)
     text = re.sub(r'(\d+)\s*lakh', r'\1 lakh', text, flags=re.IGNORECASE)
@@ -35,12 +35,12 @@ def normalize_text_for_anchor(text: str) -> str:
 
 async def synthesize_segment(text: str, output_path: str, voice: str = "en-IN-NeerjaNeural"):
     """
-    Synthesizes speech using edge-tts.
-    'en-IN-NeerjaNeural' produces a calm, polite, broadcast-quality news tone.
+    en-IN-NeerjaNeural: Natural, polite Indian English anchor tone.
+    Rate +5% keeps total pacing around 3:30 without slurring speech.
     """
-    clean_text = normalize_text_for_anchor(text)
+    spoken_text = clean_script_for_broadcast(text)
     communicate = edge_tts.Communicate(
-        clean_text,
+        spoken_text,
         voice=voice,
         rate="+5%",
         pitch="-1Hz"
