@@ -24,6 +24,10 @@ def main():
         shutil.rmtree(workspace)
     os.makedirs(workspace, exist_ok=True)
 
+    # Ensure work/output directory exists for GitHub Actions
+    output_dir = os.path.join("work", "output")
+    os.makedirs(output_dir, exist_ok=True)
+
     print("Step 1: Generating script via LLM or dynamic fallback...")
     script_data = generate_broadcast_script(HEADLINES)
 
@@ -42,7 +46,7 @@ def main():
         "video_path": intro_video
     })
 
-    # 2. Ten Stories (10 unique videos)
+    # 2. Ten Stories
     for idx, story in enumerate(script_data["stories"], start=1):
         print(f"Processing Story {idx}/10: {story['headline']}...")
         audio_path = os.path.join(workspace, f"audio_{idx:02d}.mp3")
@@ -71,9 +75,9 @@ def main():
         "video_path": outro_video
     })
 
-    # 4. Final Render
-    final_output = "daily_market_briefing.mp4"
-    print("Step 3: Rendering video with subtitles...")
+    # 4. Final Render - matching GitHub Actions path exactly
+    final_output = os.path.join(output_dir, "india_market_3min.mp4")
+    print(f"Step 3: Rendering video to {final_output} with subtitles...")
     compose_broadcast_video(segments_meta, final_output)
     print(f"Process complete: {final_output}")
 
