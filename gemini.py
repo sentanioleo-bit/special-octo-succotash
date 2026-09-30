@@ -3,41 +3,74 @@ import json
 import re
 
 SYSTEM_PROMPT = """
-You are a sharp, factual morning financial news presenter.
+You are a sharp, factual financial news anchor delivering a rapid-fire market briefing.
 
-Structure:
-- intro: Short polite morning welcome to traders (under 15 words).
-- stories: Exactly 10 distinct market updates.
-  - headline: Clear, concise headline.
-  - script: Exactly 2 to 3 sentences covering ONLY the core facts, numbers, dates, percentage changes, or company actions.
-  - search_query: A 2-to-3 word visual search term for stock video (e.g., "trading desk", "container port", "corporate office", "oil refinery").
-- outro: Brief professional sign-off (under 15 words).
+Structure & Rules:
+- intro: Polite morning welcome to traders (maximum 15 words).
+- stories: Exactly 10 distinct, major market updates.
+  - Each story MUST consist of exactly 2 to 3 sentences.
+  - Sentence 1: The key event or corporate headline.
+  - Sentence 2: Key figures, percentages, dates, or deal sizes.
+  - Sentence 3: Direct factual significance or impact.
+  - search_query: A 2-to-3 word visual search term for stock footage (e.g., "trading floor", "cargo port", "oil refinery", "tech server").
+- outro: Professional sign-off (maximum 15 words).
 
-STRICT RULES:
-1. DO NOT add generic closing lines like:
-   - "Investors are tracking..."
-   - "Traders are closely watching..."
-   - "Market volatility impacts sector positioning..."
-   - "...going into the active trading session."
-2. Stop immediately after stating the 2nd or 3rd factual sentence.
-3. Output strictly valid JSON matching this schema:
+STRICT NEGATIVE CONSTRAINTS:
+1. NEVER use generic filler phrases like:
+   - "investors are tracking institutional order flows"
+   - "technical momentum closely as market volatility impacts"
+   - "sector positioning going into the active trading session"
+   - "analysts are watching key levels"
+2. End each story immediately after the 2nd or 3rd factual sentence.
+3. Every sentence must contain distinct facts relevant only to that specific company or index.
+4. Output strictly valid JSON matching this schema:
 {
-  "intro": "Good morning. Here are your top ten financial market stories for today.",
+  "intro": "Good morning. Here are the top ten financial market headlines you need to know today.",
   "stories": [
     {
-      "headline": "Armee Infotech Debuts on Exchanges",
-      "script": "Armee Infotech is listing on the bourses today following its recent public offer. The issue saw strong subscription across retail and non-institutional categories. Initial trading begins at the opening bell.",
-      "search_query": "stock exchange"
+      "headline": "...",
+      "script": "...",
+      "search_query": "..."
     }
   ],
-  "outro": "That is your market briefing. Stay disciplined and trade safely today."
+  "outro": "That concludes today's market briefing. Trade with discipline and watch your risk."
 }
 """
 
 def generate_broadcast_script(news_headlines: list) -> dict:
     user_prompt = "Top financial headlines:\n" + "\n".join(news_headlines[:15])
 
-    # 1. Try Gemini first (most reliable for structured JSON)
+    # 1. Try Groq (Llama-3.3-70b-versatile is ultra-fast and reliable on free tier)
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key:
+        try:
+            import requests
+            headers = {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.2
+            }
+            res = requests.post("[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)", headers=headers, json=payload, timeout=30)
+            if res.status_code == 200:
+                raw_text = res.json()["choices"][0]["message"]["content"].strip()
+                data = _parse_json_safely(raw_text)
+                if data and "stories" in data and len(data["stories"]) > 0:
+                    print("Successfully generated news script using Groq.")
+                    return data
+            else:
+                print(f"Groq API returned error status {res.status_code}: {res.text}")
+        except Exception as e:
+            print(f"Groq API call exception: {e}")
+
+    # 2. Try Gemini
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if gemini_key:
         try:
@@ -48,42 +81,15 @@ def generate_broadcast_script(news_headlines: list) -> dict:
                 generation_config={"response_mime_type": "application/json"}
             )
             response = model.generate_content([SYSTEM_PROMPT, user_prompt])
-            parsed = _parse_json_safely(response.text.strip())
-            if parsed and "stories" in parsed and len(parsed["stories"]) > 0:
-                print("Successfully generated script via Gemini.")
-                return parsed
+            data = _parse_json_safely(response.text.strip())
+            if data and "stories" in data and len(data["stories"]) > 0:
+                print("Successfully generated news script using Gemini.")
+                return data
         except Exception as e:
-            print(f"Gemini API request failed: {e}")
+            print(f"Gemini API call exception: {e}")
 
-    # 2. Try Grok (xAI) if key is present
-    xai_key = os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
-    if xai_key:
-        try:
-            import requests
-            headers = {
-                "Authorization": f"Bearer {xai_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": "grok-beta",
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.3
-            }
-            res = requests.post("https://api.x.ai/v1/chat/completions", headers=headers, json=payload, timeout=30)
-            if res.status_code == 200:
-                raw_text = res.json()["choices"][0]["message"]["content"].strip()
-                parsed = _parse_json_safely(raw_text)
-                if parsed and "stories" in parsed and len(parsed["stories"]) > 0:
-                    print("Successfully generated script via Grok.")
-                    return parsed
-        except Exception as e:
-            print(f"Grok API request failed: {e}")
-
-    # 3. Dynamic offline generator (fallback if both APIs fail or keys are missing)
-    print("WARNING: API calls failed or keys missing. Falling back to dynamic summary generator.")
+    # 3. Dynamic clean fallback (Generic boilerplate is eliminated)
+    print("WARNING: APIs failed. Using factual fallback script.")
     return _build_fallback_script(news_headlines)
 
 def _parse_json_safely(raw_text: str) -> dict:
@@ -94,18 +100,17 @@ def _parse_json_safely(raw_text: str) -> dict:
 
 def _build_fallback_script(headlines: list) -> dict:
     stories = []
-    clean_heads = headlines[:10] if len(headlines) >= 10 else headlines + ["Market Index Update"] * (10 - len(headlines))
+    clean_heads = headlines[:10] if len(headlines) >= 10 else headlines + ["Market Index Movement Reported"] * (10 - len(headlines))
     for i, h in enumerate(clean_heads, start=1):
-        # Clean headline text
-        title = h.strip().rstrip(".")
+        clean_title = h.strip().rstrip(".")
         stories.append({
-            "headline": title[:70],
-            "script": f"Story {i}. {title}. Key financial details and official corporate updates were filed in exchange disclosures ahead of the bell. Review benchmark levels and stock-specific price action for updates.",
-            "search_query": "stock market trading desk"
+            "headline": clean_title[:65],
+            "script": f"Story {i}. {clean_title}. Public filings and exchange notifications detail the latest development. Further updates will be reflected in today's official exchange disclosures.",
+            "search_query": "stock exchange market"
         })
     return {
-        "intro": "Good morning. Here is your daily market briefing on today's top financial headlines.",
+        "intro": "Good morning. Here are your top ten financial market headlines for today.",
         "stories": stories,
-        "outro": "That concludes today's market briefing. Have a disciplined trading session."
+        "outro": "That is your market briefing. Trade safely and stay disciplined."
     }
   
