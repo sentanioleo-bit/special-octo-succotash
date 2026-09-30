@@ -1,31 +1,24 @@
 import os
 import json
 import re
+import requests
 
 SYSTEM_PROMPT = """
-You are a sharp, factual financial news anchor delivering a rapid-fire market briefing.
+You are a sharp, factual financial news anchor delivering an opening market briefing.
 
-Structure & Rules:
-- intro: Polite morning welcome to traders (maximum 15 words).
-- stories: Exactly 10 distinct, major market updates.
-  - Each story MUST consist of exactly 2 to 3 sentences.
-  - Sentence 1: The key event or corporate headline.
-  - Sentence 2: Key figures, percentages, dates, or deal sizes.
-  - Sentence 3: Direct factual significance or impact.
-  - search_query: A 2-to-3 word visual search term for stock footage (e.g., "trading floor", "cargo port", "oil refinery", "tech server").
-- outro: Professional sign-off (maximum 15 words).
+You will receive headlines from today's market. For EVERY story:
+1. "headline": Clean, concise headline (max 8 words).
+2. "script": Write exactly 2 to 3 sentences covering the specific event, numbers, percentages, dates, and what actually occurred. Explain the headline like a professional financial broadcaster.
+3. "search_query": 2 to 3 visual words for stock footage (e.g., "banking vault", "trading screens", "factory assembly").
 
-STRICT NEGATIVE CONSTRAINTS:
-1. NEVER use generic filler phrases like:
-   - "investors are tracking institutional order flows"
-   - "technical momentum closely as market volatility impacts"
-   - "sector positioning going into the active trading session"
-   - "analysts are watching key levels"
-2. End each story immediately after the 2nd or 3rd factual sentence.
-3. Every sentence must contain distinct facts relevant only to that specific company or index.
-4. Output strictly valid JSON matching this schema:
+STRICT RULES:
+- Never use generic filler templates (e.g., "public filings detail", "investors are tracking", "analysts watch closely").
+- Stop immediately after the 2nd or 3rd factual sentence.
+- You MUST output valid raw JSON with no markdown backticks.
+
+Format:
 {
-  "intro": "Good morning. Here are the top ten financial market headlines you need to know today.",
+  "intro": "Good morning. Here are today's top market updates.",
   "stories": [
     {
       "headline": "...",
@@ -33,18 +26,18 @@ STRICT NEGATIVE CONSTRAINTS:
       "search_query": "..."
     }
   ],
-  "outro": "That concludes today's market briefing. Trade with discipline and watch your risk."
+  "outro": "That concludes your morning briefing. Trade with discipline and manage your risk."
 }
 """
 
 def generate_broadcast_script(news_headlines: list) -> dict:
-    user_prompt = "Top financial headlines:\n" + "\n".join(news_headlines[:15])
+    user_prompt = "Top financial headlines to summarize:\n" + "\n".join(f"- {h}" for h in news_headlines[:15])
 
-    # 1. Try Groq (Llama-3.3-70b-versatile is ultra-fast and reliable on free tier)
+    # 1. Try Groq API
     groq_key = os.environ.get("GROQ_API_KEY")
     if groq_key:
         try:
-            import requests
+            print("Connecting to Groq API...")
             headers = {
                 "Authorization": f"Bearer {groq_key}",
                 "Content-Type": "application/json"
@@ -58,59 +51,57 @@ def generate_broadcast_script(news_headlines: list) -> dict:
                 "response_format": {"type": "json_object"},
                 "temperature": 0.2
             }
-            res = requests.post("[https://api.groq.com/openai/v1/chat/completions](https://api.groq.com/openai/v1/chat/completions)", headers=headers, json=payload, timeout=30)
+            res = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
             if res.status_code == 200:
                 raw_text = res.json()["choices"][0]["message"]["content"].strip()
                 data = _parse_json_safely(raw_text)
                 if data and "stories" in data and len(data["stories"]) > 0:
-                    print("Successfully generated news script using Groq.")
+                    print(f"Successfully generated {len(data['stories'])} stories via Groq.")
                     return data
             else:
-                print(f"Groq API returned error status {res.status_code}: {res.text}")
+                print(f"Groq API Error {res.status_code}: {res.text}")
         except Exception as e:
-            print(f"Groq API call exception: {e}")
+            print(f"Groq Exception: {e}")
 
-    # 2. Try Gemini
+    # 2. Try Gemini API
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if gemini_key:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
-                generation_config={"response_mime_type": "application/json"}
-            )
-            response = model.generate_content([SYSTEM_PROMPT, user_prompt])
-            data = _parse_json_safely(response.text.strip())
-            if data and "stories" in data and len(data["stories"]) > 0:
-                print("Successfully generated news script using Gemini.")
-                return data
+            print("Connecting to Gemini API...")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+            payload = {
+                "contents": [
+                    {"role": "user", "parts": [{"text": SYSTEM_PROMPT + "\n\n" + user_prompt}]}
+                ],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "responseMimeType": "application/json"
+                }
+            }
+            res = requests.post(url, json=payload, timeout=30)
+            if res.status_code == 200:
+                raw_text = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+                data = _parse_json_safely(raw_text)
+                if data and "stories" in data and len(data["stories"]) > 0:
+                    print(f"Successfully generated {len(data['stories'])} stories via Gemini.")
+                    return data
+            else:
+                print(f"Gemini API Error {res.status_code}: {res.text}")
         except Exception as e:
-            print(f"Gemini API call exception: {e}")
+            print(f"Gemini Exception: {e}")
 
-    # 3. Dynamic clean fallback (Generic boilerplate is eliminated)
-    print("WARNING: APIs failed. Using factual fallback script.")
-    return _build_fallback_script(news_headlines)
+    # 3. Raise error so Actions log reveals exact API failures instead of hiding behind filler
+    raise RuntimeError("Both Groq and Gemini APIs failed to generate stories. Check the logs above.")
 
 def _parse_json_safely(raw_text: str) -> dict:
-    if raw_text.startswith("```"):
-        raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-        raw_text = re.sub(r"\s*```$", "", raw_text)
-    return json.loads(raw_text.strip())
-
-def _build_fallback_script(headlines: list) -> dict:
-    stories = []
-    clean_heads = headlines[:10] if len(headlines) >= 10 else headlines + ["Market Index Movement Reported"] * (10 - len(headlines))
-    for i, h in enumerate(clean_heads, start=1):
-        clean_title = h.strip().rstrip(".")
-        stories.append({
-            "headline": clean_title[:65],
-            "script": f"Story {i}. {clean_title}. Public filings and exchange notifications detail the latest development. Further updates will be reflected in today's official exchange disclosures.",
-            "search_query": "stock exchange market"
-        })
-    return {
-        "intro": "Good morning. Here are your top ten financial market headlines for today.",
-        "stories": stories,
-        "outro": "That is your market briefing. Trade safely and stay disciplined."
-    }
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    return json.loads(cleaned.strip())
   
