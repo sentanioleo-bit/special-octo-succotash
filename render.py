@@ -1,151 +1,105 @@
-import logging
 import os
-from typing import Any, Dict, List, Optional
+import subprocess
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 
-from moviepy.editor import (
-    AudioFileClip,
-    ColorClip,
-    CompositeVideoClip,
-    TextClip,
-    VideoFileClip,
-    concatenate_videoclips,
-)
+def format_ass_timestamp(seconds: float) -> str:
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    centis = int(round((seconds - int(seconds)) * 100))
+    if centis >= 100:
+        centis = 99
+    return f"{hrs:01d}:{mins:02d}:{secs:02d}.{centis:02d}"
 
-logger = logging.getLogger(__name__)
+def generate_broadcast_ass(sub_events: list, output_ass_path: str):
+    """Generates professional news styling with top headline tags and lower-third captions."""
+    ass_header = """[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
 
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-W, H = 1080, 1920
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: HeaderBanner, Arial, 42, &H0000FFFF, &H00FFFFFF, &H00000000, &H80000000, 1, 0, 0, 0, 100, 100, 1, 0, 1, 3, 2, 8, 40, 40, 190, 1
+Style: BroadcastCaptions, Arial, 50, &H00FFFFFF, &H0000FFFF, &H00000000, &H90000000, 1, 0, 0, 0, 100, 100, 0, 0, 1, 3, 2, 2, 50, 50, 420, 1
 
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+    with open(output_ass_path, "w", encoding="utf-8") as f:
+        f.write(ass_header)
+        for event in sub_events:
+            start_t = format_ass_timestamp(event["start"])
+            end_t = format_ass_timestamp(event["end"])
+            if event.get("headline"):
+                f.write(f"Dialogue: 0,{start_t},{end_t},HeaderBanner,,0,0,0,,{event['headline'].upper()}\n")
+            if event.get("caption"):
+                f.write(f"Dialogue: 0,{start_t},{end_t},BroadcastCaptions,,0,0,0,,{event['caption'].upper()}\n")
 
-def _prepare_background(video_path: Optional[str], duration: float):
-    if video_path and os.path.exists(video_path):
-        try:
-            v = VideoFileClip(video_path).without_audio()
-            if v.duration < duration:
-                v = v.loop(duration=duration)
-            else:
-                v = v.subclip(0, duration)
-            scale = max(W / v.w, H / v.h)
-            v = v.resize(scale)
-            v = v.crop(x_center=v.w / 2, y_center=v.h / 2, width=W, height=H)
-            return v.set_duration(duration)
-        except Exception as e:
-            logger.warning(f"Error handling b-roll {video_path}: {e}")
-    return ColorClip(size=(W, H), color=(10, 15, 29), duration=duration)
+def compose_broadcast_video(segments_meta: list, output_mp4: str):
+    """Composites 10 stories + intro/outro into a complete 1080x1920 broadcast video."""
+    total_audio = sum(AudioFileClip(s["audio_path"]).duration for s in segments_meta)
+    print(f"Total calculated duration: {total_audio:.1f}s ({total_audio/60:.2f} mins)")
 
+    if total_audio > 240:
+        raise ValueError(f"Duration exceeded 4-minute maximum ({total_audio:.1f}s).")
 
-def _badge(text: str, size: int, color: str, bg: str, y: int, duration: float):
-    return (
-        TextClip(
-            text,
-            fontsize=size,
-            color=color,
-            font=FONT,
-            bg_color=bg,
-            method="caption",
-            size=(960, None),
-            align="center",
-        )
-        .set_position(("center", y))
-        .set_duration(duration)
-    )
+    processed_clips = []
+    sub_events = []
+    current_time = 0.0
 
+    for seg in segments_meta:
+        a_clip = AudioFileClip(seg["audio_path"])
+        duration = a_clip.duration
 
-def _build_caption_sequence(narration: str, total_duration: float) -> List:
-    words = narration.split()
-    if not words:
-        return []
+        v_clip = VideoFileClip(seg["video_path"]).resize((1080, 1920))
+        if v_clip.duration < duration:
+            v_clip = v_clip.loop(duration=duration)
+        else:
+            v_clip = v_clip.subclip(0, duration)
 
-    chunk_size = 5
-    chunks = [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
-    chunk_duration = total_duration / len(chunks)
-    clips = []
+        v_clip = v_clip.set_audio(a_clip)
+        processed_clips.append(v_clip)
 
-    for i, chunk in enumerate(chunks):
-        clip = (
-            TextClip(
-                chunk.upper(),
-                fontsize=56,
-                color="#FFFFFF",
-                font=FONT,
-                stroke_color="black",
-                stroke_width=2,
-                method="caption",
-                size=(920, None),
-                align="center",
-            )
-            .set_start(i * chunk_duration)
-            .set_duration(chunk_duration)
-            .set_position(("center", 1380))
-        )
-        clips.append(clip)
-    return clips
+        sub_events.append({
+            "start": current_time,
+            "end": current_time + duration,
+            "headline": seg.get("headline", ""),
+            "caption": seg.get("script", "")
+        })
+        current_time += duration
 
+    final_cut = concatenate_videoclips(processed_clips, method="compose")
+    raw_video = "temp_raw_render.mp4"
+    ass_path = "broadcast.ass"
 
-def _segment(audio_path: str, bg_path: Optional[str], overlays_fn, narration: str):
-    audio = AudioFileClip(audio_path)
-    dur = audio.duration
-    bg = _prepare_background(bg_path, dur)
-    layers = [bg] + overlays_fn(dur) + _build_caption_sequence(narration, dur)
-    return CompositeVideoClip(layers, size=(W, H)).set_duration(dur).set_audio(audio)
-
-
-def render_briefing_video(briefing: Dict[str, Any], media: Dict[str, Any],
-                          audio_manifest: Dict[str, Any], output_path: str) -> str:
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    segments = []
-
-    # 1. Hook
-    hook_audio = audio_manifest.get("hook_audio")
-    if hook_audio and os.path.exists(hook_audio):
-        segments.append(_segment(
-            hook_audio, media.get("hook"),
-            lambda d: [_badge(" TODAY'S MARKET BRIEFING ", 48, "#FACC15", "#000000", 200, d)],
-            briefing.get("hook", ""),
-        ))
-
-    # 2. Stories
-    story_audios = audio_manifest.get("story_audios", [])
-    story_media = media.get("stories", [])
-    for idx, story in enumerate(briefing.get("stories", []), start=1):
-        if idx - 1 >= len(story_audios) or not os.path.exists(story_audios[idx - 1]):
-            continue
-        headline = story.get("headline", f"Market Story {idx}").upper()
-        ticker = story.get("ticker", "MARKET UPDATE")
-        bg = story_media[idx - 1] if idx - 1 < len(story_media) else None
-
-        def overlays(d, headline=headline, ticker=ticker, idx=idx):
-            return [
-                _badge(f" {idx:02d}. {headline} ", 44, "#FACC15", "#000000", 180, d),
-                _badge(f" {ticker} ", 36, "#FFFFFF", "#1E293B", 330, d),
-            ]
-
-        segments.append(_segment(story_audios[idx - 1], bg, overlays, story.get("narration", "")))
-
-    # 3. Outro
-    outro_audio = audio_manifest.get("outro_audio")
-    if outro_audio and os.path.exists(outro_audio):
-        segments.append(_segment(
-            outro_audio, media.get("outro"),
-            lambda d: [_badge(" SUBSCRIBE FOR DAILY BRIEFINGS ", 46, "#FACC15", "#000000", 200, d)],
-            briefing.get("outro", ""),
-        ))
-
-    if not segments:
-        raise RuntimeError("No video segments were built (missing audio files).")
-
-    final = concatenate_videoclips(segments, method="compose")
-    logger.info(f"Final video duration: {final.duration:.1f}s")
-    final.write_videofile(
-        output_path,
-        fps=24,
+    final_cut.write_videofile(
+        raw_video,
+        fps=30,
         codec="libx264",
         audio_codec="aac",
         preset="fast",
-        bitrate="2600k",
-        threads=4,
-        temp_audiofile="work/temp_audio.m4a",
-        ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+        threads=4
     )
-    return output_path
-                              
+
+    generate_broadcast_ass(sub_events, ass_path)
+
+    # Burn subtitles via FFmpeg
+    ffmpeg_cmd = [
+        "ffmpeg", "-y",
+        "-i", raw_video,
+        "-vf", f"ass={ass_path}",
+        "-c:v", "libx264",
+        "-crf", "18",
+        "-preset", "fast",
+        "-c:a", "copy",
+        output_mp4
+    ]
+    subprocess.run(ffmpeg_cmd, check=True)
+
+    for temp_f in [raw_video, ass_path]:
+        if os.path.exists(temp_f):
+            os.remove(temp_f)
+
+    print(f"Render completed: {output_mp4}")
+    
