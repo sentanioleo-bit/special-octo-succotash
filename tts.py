@@ -1,66 +1,52 @@
+import re
 import asyncio
-import logging
-import os
-import time
-from typing import Any, Dict
-
 import edge_tts
 
-logger = logging.getLogger(__name__)
+def normalize_text_for_anchor(text: str) -> str:
+    """Expands shorthand and financial symbols so edge-tts speaks conversationally."""
+    text = re.sub(r'[\?\.]{2,}', '.', text)
+    text = text.replace("&amp;", "and").replace("&", "and")
+    text = re.sub(r'[\(\)\[\]]', '', text)
 
-VOICE_INDIA = "en-IN-NeerjaNeural"
-VOICE_GLOBAL = "en-US-ChristopherNeural"
-
-
-async def _synth(text: str, voice: str, path: str) -> None:
-    communicate = edge_tts.Communicate(text, voice, rate="-5%")
-    await communicate.save(path)
-
-
-def _synth_with_retry(text: str, voice: str, path: str, attempts: int = 4) -> None:
-    last_err = None
-    for n in range(1, attempts + 1):
-        try:
-            asyncio.run(_synth(text, voice, path))
-            if os.path.exists(path) and os.path.getsize(path) > 0:
-                return
-        except Exception as e:
-            last_err = e
-            logger.warning(f"TTS attempt {n} failed for {os.path.basename(path)}: {e}")
-        time.sleep(2 * n)
-    raise RuntimeError(f"TTS failed for {path}: {last_err}")
-
-
-def generate_narration_audio(briefing: Dict[str, Any], edition: str = "india", output_dir: str = "work/audio") -> Dict[str, Any]:
-    os.makedirs(output_dir, exist_ok=True)
-    voice = VOICE_INDIA if str(edition).lower() == "india" else VOICE_GLOBAL
-
-    manifest = {
-        "hook_audio": None,
-        "story_audios": [],
-        "outro_audio": None,
+    expansions = {
+        "OFS": "Offer for Sale",
+        "IPO": "I P O",
+        "200 DMAs": "two hundred day moving averages",
+        "200 DMA": "two hundred day moving average",
+        "50 SMA": "fifty day simple moving average",
+        "T+1": "T plus one",
+        "SEBI's": "Sebi's",
+        "SEBI": "Sebi",
+        "QIB": "Qualified Institutional Buyer",
+        "GMP": "Grey Market Premium",
+        "cr": "crore rupees",
+        "Cr": "crore rupees",
+        "Rs": "rupees"
     }
+    for acronym, spoken in expansions.items():
+        text = re.sub(rf'\b{re.escape(acronym)}\b', spoken, text)
 
-    # Hook
-    hook_text = briefing.get("hook")
-    if hook_text:
-        hook_path = os.path.join(output_dir, "hook.mp3")
-        _synth_with_retry(str(hook_text), voice, hook_path)
-        manifest["hook_audio"] = hook_path
+    # Format currencies and percentages
+    text = re.sub(r'\$(\d+(\.\d+)?)', r'\1 dollars', text)
+    text = re.sub(r'(\d+(\.\d+)?)%', r'\1 percent', text)
+    text = re.sub(r'(\d+)\s*lakh', r'\1 lakh', text, flags=re.IGNORECASE)
 
-    # Stories
-    for idx, story in enumerate(briefing.get("stories", []), start=1):
-        story_text = story.get("narration") or story.get("text") or str(story)
-        story_path = os.path.join(output_dir, f"story_{idx:02d}.mp3")
-        _synth_with_retry(str(story_text), voice, story_path)
-        manifest["story_audios"].append(story_path)
+    return text.strip()
 
-    # Outro
-    outro_text = briefing.get("outro")
-    if outro_text:
-        outro_path = os.path.join(output_dir, "outro.mp3")
-        _synth_with_retry(str(outro_text), voice, outro_path)
-        manifest["outro_audio"] = outro_path
+async def synthesize_segment(text: str, output_path: str, voice: str = "en-IN-NeerjaNeural"):
+    """
+    Synthesizes speech using edge-tts.
+    'en-IN-NeerjaNeural' produces a calm, polite, broadcast-quality news tone.
+    """
+    clean_text = normalize_text_for_anchor(text)
+    communicate = edge_tts.Communicate(
+        clean_text,
+        voice=voice,
+        rate="+5%",
+        pitch="-1Hz"
+    )
+    await communicate.save(output_path)
 
-    return manifest
+def generate_audio(text: str, output_path: str, voice: str = "en-IN-NeerjaNeural"):
+    asyncio.run(synthesize_segment(text, output_path, voice))
     
