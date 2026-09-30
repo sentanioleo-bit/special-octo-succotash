@@ -8,6 +8,7 @@ OUTPUT = WORK / 'output'
 for p in (WORK, MEDIA, OUTPUT): p.mkdir(parents=True, exist_ok=True)
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+GROQ_MODEL = os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b')
 GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')
 GEMINI_TTS_MODEL = os.getenv('GEMINI_TTS_MODEL', 'gemini-3.8-flash-tts')
 GEMINI_TTS_VOICE = os.getenv('GEMINI_TTS_VOICE', 'Kore')
