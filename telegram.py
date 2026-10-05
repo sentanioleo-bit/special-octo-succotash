@@ -59,3 +59,33 @@ def send_video_to_telegram(
     except (requests.RequestException, OSError, ValueError) as exc:
         logger.warning("Telegram upload failed; workflow can still publish a release link: %s", exc)
     return False
+
+
+def send_message_to_telegram(metadata: dict, edition: str = "india") -> bool:
+    """Send full upload-ready YouTube metadata as a separate Telegram message."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        logger.info("Telegram secrets not set; skipping YouTube metadata message.")
+        return False
+
+    message = (
+        f"📋 YOUTUBE UPLOAD PACK — {edition.upper()}\n\n"
+        f"TITLE\n{metadata.get('yt_title', '')}\n\n"
+        f"DESCRIPTION\n{metadata.get('yt_description', '')}\n\n"
+        f"TAGS (copy into YouTube's Tags field)\n{metadata.get('yt_tags', '')}"
+    )
+    # Telegram sendMessage has a 4096-character text limit.
+    message = message[:4000]
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": message},
+            timeout=30,
+        )
+        if response.ok and response.json().get("ok"):
+            return True
+        logger.warning("Telegram metadata message failed: HTTP %s: %s", response.status_code, response.text[:500])
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Telegram metadata message failed: %s", exc)
+    return False

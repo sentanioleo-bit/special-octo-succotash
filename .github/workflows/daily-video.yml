@@ -50,7 +50,7 @@ jobs:
           pip install ruff
 
       - name: Check Python Syntax
-        run: python -m py_compile main.py news_sources.py gemini.py media.py render.py telegram.py tts.py
+        run: python -m py_compile main.py news_sources.py gemini.py media.py render.py telegram.py tts.py youtube_metadata.py
 
       - name: Check Code for Lint Errors
         run: ruff check main.py news_sources.py gemini.py media.py render.py telegram.py tts.py --select E9,F --ignore F401,F541
@@ -74,10 +74,12 @@ jobs:
         run: |
           TAG="${EDITION}-$(date -u +%Y%m%d-%H%M%S)"
           FILE="work/output/${EDITION}_market_3min.mp4"
+          SEO_FILE="work/output/${EDITION}_youtube_metadata.txt"
           test -s "$FILE"
-          gh release create "$TAG" "$FILE" \
+          test -s "$SEO_FILE"
+          gh release create "$TAG" "$FILE" "$SEO_FILE" \
             --title "${EDITION^} Market Briefing $(date -u +%Y-%m-%d)" \
-            --notes "Automated daily market video ($EDITION edition)."
+            --notes "Automated daily market video ($EDITION edition). Includes a text file with the customized YouTube title, description, and tags."
           URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${EDITION}_market_3min.mp4"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
