@@ -1,65 +1,126 @@
 import os
-import requests
+import textwrap
 import urllib.parse
+import subprocess
+
+import requests
+from PIL import Image, ImageDraw, ImageFont
 
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
+_USED_PEXELS_IDS: set[str] = set()
 
-# 12 clean raw direct video URLs (no brackets, no markdown)
-PUBLIC_STOCK_VIDEOS = [
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyBlazes.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/SubaruOutbackOnStreetAndDirt.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WeAreGoingOnBullrun.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/WhatCarCanYouGetForAGrand.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4"
-]
+
+def _font(size: int, bold: bool = False):
+    candidates = (
+        ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"]
+        if bold else
+        ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+         "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"]
+    )
+    for path in candidates:
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size=size)
+    return ImageFont.load_default()
+
+
+def _make_branded_fallback(query: str, output_path: str) -> bool:
+    """Create a clean branded motion-card fallback instead of unrelated demo footage."""
+    try:
+        width, height = 1080, 1920
+        image = Image.new("RGB", (width, height))
+        pixels = image.load()
+        for y in range(height):
+            t = y / max(height - 1, 1)
+            color = (int(8 + 5 * t), int(16 + 9 * t), int(32 + 18 * t))
+            for x in range(width):
+                pixels[x, y] = color
+
+        draw = ImageDraw.Draw(image)
+        accent = (0, 170, 255)
+        draw.rounded_rectangle((64, 90, 1016, 178), radius=28, fill=(13, 33, 57), outline=accent, width=3)
+        draw.text((94, 112), "NEWS STUDIO  /  MARKET BRIEFING", font=_font(31, True), fill=(240, 248, 255))
+        draw.line((70, 370, 1010, 370), fill=accent, width=5)
+        draw.text((72, 420), "MARKET UPDATE", font=_font(36, True), fill=accent)
+        cleaned = " ".join((query or "Financial markets").split()).strip()
+        lines = textwrap.wrap(cleaned[:150], width=23) or ["Financial markets"]
+        y = 510
+        for line in lines[:5]:
+            draw.text((72, y), line, font=_font(62, True), fill=(255, 255, 255), stroke_width=1)
+            y += 88
+        draw.rounded_rectangle((72, 1480, 1008, 1600), radius=22, fill=(12, 29, 49), outline=(40, 82, 120), width=2)
+        draw.text((105, 1518), "LATEST DEVELOPMENTS  •  MARKET NEWS", font=_font(25, True), fill=(210, 230, 248))
+        draw.text((72, 1695), "News Studio", font=_font(32, True), fill=(160, 190, 220))
+        poster = os.path.splitext(output_path)[0] + "_poster.jpg"
+        image.save(poster, quality=92)
+        subprocess.run(
+            ["ffmpeg", "-y", "-loop", "1", "-i", poster, "-t", "8",
+             "-vf", "scale=1080:1920,format=yuv420p", "-r", "30",
+             "-an", "-c:v", "libx264", "-preset", "ultrafast", output_path],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        os.remove(poster)
+        return os.path.isfile(output_path) and os.path.getsize(output_path) > 0
+    except Exception as err:
+        print(f"Branded fallback creation failed: {err}")
+        return False
+
 
 def download_vertical_clip(query: str, output_path: str, fallback_idx: int = 0) -> bool:
-    """Downloads background video clip without link-formatting bugs."""
-    clean_query = str(query).strip()
+    """Download relevant portrait footage from Pexels or create a branded fallback."""
+    clean_query = " ".join(str(query).split()).strip() or "financial markets"
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    # Try Pexels if API key is present
     if PEXELS_API_KEY:
         try:
             encoded_query = urllib.parse.quote(clean_query)
-            url = f"https://api.pexels.com/videos/search?query={encoded_query}&orientation=portrait&per_page=5"
-            headers = {"Authorization": PEXELS_API_KEY}
-            response = requests.get(url, headers=headers, timeout=12)
-            if response.status_code == 200:
-                data = response.json()
-                videos = data.get("videos", [])
-                if videos:
-                    video_files = videos[0].get("video_files", [])
-                    vertical_files = [
-                        f for f in video_files 
-                        if f.get("height", 0) > f.get("width", 0) and f.get("height", 0) >= 1080
-                    ]
-                    selected_file = vertical_files[0] if vertical_files else video_files[0]
-                    download_url = selected_file.get("link", "").strip()
-                    if download_url.startswith("http"):
-                        with requests.get(download_url, stream=True, timeout=25) as stream:
-                            with open(output_path, "wb") as f:
+            url = (
+                "https://api.pexels.com/videos/search?"
+                f"query={encoded_query}&orientation=portrait&per_page=15"
+            )
+            response = requests.get(
+                url, headers={"Authorization": PEXELS_API_KEY}, timeout=15
+            )
+            response.raise_for_status()
+            videos = response.json().get("videos", [])
+            # Try multiple results and skip clips already used in this run.
+            videos.sort(key=lambda v: (v.get("width", 0) < v.get("height", 0),
+                                       v.get("duration", 0) >= 8), reverse=True)
+            for video in videos:
+                video_id = str(video.get("id", ""))
+                if video_id and video_id in _USED_PEXELS_IDS:
+                    continue
+                files = video.get("video_files", [])
+                files.sort(
+                    key=lambda f: (
+                        f.get("height", 0) > f.get("width", 0),
+                        f.get("height", 0) >= 1080,
+                        f.get("width", 0) * f.get("height", 0),
+                    ),
+                    reverse=True,
+                )
+                for video_file in files:
+                    link = (video_file.get("link") or "").strip()
+                    if not link.startswith("https://"):
+                        continue
+                    try:
+                        with requests.get(link, stream=True, timeout=30) as stream:
+                            stream.raise_for_status()
+                            with open(output_path, "wb") as out:
                                 for chunk in stream.iter_content(chunk_size=1024 * 1024):
-                                    f.write(chunk)
-                        return True
-        except Exception as e:
-            print(f"Pexels fetch error: {e}")
+                                    if chunk:
+                                        out.write(chunk)
+                        if os.path.getsize(output_path) > 0:
+                            if video_id:
+                                _USED_PEXELS_IDS.add(video_id)
+                            print(f"Downloaded relevant Pexels footage for: {clean_query}")
+                            return True
+                    except requests.RequestException:
+                        if os.path.exists(output_path):
+                            os.remove(output_path)
+                        continue
+        except Exception as err:
+            print(f"Pexels fetch error for '{clean_query}': {err}")
 
-    # Zero-key fallback: use clean public stock clips
-    chosen_url = PUBLIC_STOCK_VIDEOS[fallback_idx % len(PUBLIC_STOCK_VIDEOS)]
-    try:
-        with requests.get(chosen_url, stream=True, timeout=25) as r:
-            with open(output_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    f.write(chunk)
-        return True
-    except Exception as err:
-        print(f"Fallback clip download failed: {err}")
-        return False
-        
+    print(f"Using branded fallback visual for: {clean_query}")
+    return _make_branded_fallback(clean_query, output_path)
