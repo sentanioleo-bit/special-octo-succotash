@@ -8,7 +8,8 @@ from gemini import generate_broadcast_script
 from media import download_vertical_clip
 from news_sources import fetch_market_news
 from render import compose_broadcast_video
-from telegram import send_video_to_telegram
+from telegram import send_message_to_telegram, send_video_to_telegram
+from youtube_metadata import build_youtube_metadata, write_youtube_metadata
 from tts import generate_audio
 
 MAX_STORIES = 8
@@ -82,6 +83,12 @@ def main() -> None:
     script_data["stories"] = stories
     print(f"Using {len(stories)} stories to keep the video within its duration target.")
 
+    metadata = build_youtube_metadata(edition, stories)
+    script_data.update(metadata)
+    metadata_path = os.path.join(output_dir, f"{edition}_youtube_metadata.txt")
+    write_youtube_metadata(metadata, metadata_path)
+    print(f"YouTube title/tags/description saved to {metadata_path}")
+
     segments_meta = []
 
     print("Step 2: Processing intro...")
@@ -143,6 +150,9 @@ def main() -> None:
 
     print(f"Video ready: {final_output}")
     delivered = send_video_to_telegram(final_output, script_data, edition=edition)
+    metadata_sent = send_message_to_telegram(metadata, edition=edition)
+    if metadata_sent:
+        print("Customized YouTube title, description, and tags sent to Telegram.")
     if delivered:
         print("Telegram video upload succeeded.")
     else:
