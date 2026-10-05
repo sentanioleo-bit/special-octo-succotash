@@ -49,15 +49,22 @@ jobs:
           pip install -r requirements.txt
           pip install ruff
 
-      - name: Check Code for Syntax & Import Errors
-        run: |
-          ruff check . --select E9,F --ignore F401,F541
+      - name: Check Python Syntax
+        run: python -m py_compile main.py news_sources.py gemini.py media.py render.py telegram.py tts.py
+
+      - name: Check Code for Lint Errors
+        run: ruff check main.py news_sources.py gemini.py media.py render.py telegram.py tts.py --select E9,F --ignore F401,F541
+
+      - name: Verify Fresh News Exists
+        run: python news_sources.py --edition "$EDITION" --max-age-hours 168 --limit 10
 
       - name: Run Market Video Pipeline
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py --edition "$EDITION"
 
       - name: Publish Direct Video Download Release
@@ -65,11 +72,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${EDITION}-$(date -u +%Y%m%d-%H%M)"
+          TAG="${EDITION}-$(date -u +%Y%m%d-%H%M%S)"
           FILE="work/output/${EDITION}_market_3min.mp4"
+          test -s "$FILE"
           gh release create "$TAG" "$FILE" \
             --title "${EDITION^} Market Briefing $(date -u +%Y-%m-%d)" \
-            --notes "Automated daily market video ($EDITION edition). Full quality, not compressed."
+            --notes "Automated daily market video ($EDITION edition)."
           URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${EDITION}_market_3min.mp4"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
@@ -80,10 +88,9 @@ jobs:
           VIDEO_URL: ${{ steps.release.outputs.url }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "Telegram secrets not set, skipping."
+            echo "Telegram secrets not set, skipping download-link message."
             exit 0
           fi
-          curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+          curl --fail-with-body -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=${EDITION^} market briefing is ready (full quality, no compression): ${VIDEO_URL}"
-            
+            --data-urlencode "text=${EDITION^} market briefing is ready: ${VIDEO_URL}"
