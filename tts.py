@@ -1,10 +1,13 @@
 import asyncio
 import re
+import os
 
 import edge_tts
 
 
-DEFAULT_VOICE = "en-IN-NeerjaNeural"
+DEFAULT_VOICE = os.getenv("EDGE_TTS_VOICE", "en-IN-NeerjaNeural")
+DEFAULT_RATE = os.getenv("EDGE_TTS_RATE", "-5%")
+DEFAULT_PITCH = os.getenv("EDGE_TTS_PITCH", "+0Hz")
 
 
 def clean_script_for_broadcast(text: str) -> str:
@@ -53,8 +56,8 @@ async def synthesize_segment(
     communicate = edge_tts.Communicate(
         spoken_text,
         voice=voice,
-        rate="-8%",
-        pitch="-1Hz",
+        rate=DEFAULT_RATE,
+        pitch=DEFAULT_PITCH,
         volume="+0%",
     )
     await communicate.save(output_path)
