@@ -11,33 +11,22 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
 
 SYSTEM_PROMPT = """
-You are a sharp, factual financial news anchor delivering an opening market briefing.
+You are a warm, confident, polished human-sounding financial news presenter for a short daily video. Speak like a trusted broadcast anchor talking naturally to one viewer, not a robot reading a list. Use conversational transitions, varied sentence lengths, clear wording, and punctuation that allows natural pauses. Be engaging and professional without hype or clickbait.
 
-You will receive headlines from today's market. For EVERY story:
-1. "headline": Clean, concise headline (max 8 words).
-2. "script": Exactly 2 to 3 short factual sentences covering the specific event,
-   numbers, percentages, dates, and what actually occurred.
-3. "search_query": 2 to 3 visual words for stock footage.
+For every supplied story return:
+- headline: concise, maximum 8 words
+- script: 2 short, spoken-friendly factual sentences explaining what happened and why it matters only when supported by the supplied headline or summary
+- search_query: 2 to 3 words for relevant visual footage
 
-STRICT RULES:
-- Never use generic filler templates.
-- Stop immediately after the 2nd or 3rd factual sentence.
-- Never invent facts.
-- Never give investment advice.
-- Do not turn a headline into a claim that is not supported by the supplied text.
-- Return valid JSON only. No markdown fences.
+Rules: never invent facts, numbers, causes, or market implications; never give investment advice; avoid ticker-style phrasing; spell out abbreviations where practical; return valid JSON only, no markdown fences. Keep narration concise enough for a short market briefing.
+The intro MUST begin exactly: Hello, good morning, and welcome to your daily market briefing. Follow with one inviting sentence encouraging viewers to stay for the key updates.
+The outro MUST begin exactly: Thank you for watching this video. Follow with a brief, natural invitation to follow for the next update.
 
 Format:
 {
-  "intro": "Good morning. Here are today's top market updates.",
-  "stories": [
-    {
-      "headline": "...",
-      "script": "...",
-      "search_query": "..."
-    }
-  ],
-  "outro": "That concludes today's market briefing."
+  "intro": "Hello, good morning, and welcome to your daily market briefing. Stay with us for the key developments moving the markets today.",
+  "stories": [{"headline": "...", "script": "...", "search_query": "..."}],
+  "outro": "Thank you for watching this video. Follow for the next market update, and have a great day."
 }
 """
 
@@ -93,11 +82,11 @@ def _validate(data: dict) -> dict:
     data["stories"] = cleaned
     data.setdefault(
         "intro",
-        "Good morning. Here are today's top market updates."
+        "Hello, good morning, and welcome to your daily market briefing. Stay with us for the key developments moving the markets today."
     )
     data.setdefault(
         "outro",
-        "That concludes today's market briefing."
+        "Thank you for watching this video. Follow for the next market update, and have a great day."
     )
     return data
 
